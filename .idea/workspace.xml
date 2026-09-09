@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="28752828-4beb-49e1-919d-d05e4946829e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_1.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_2.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_3.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_4.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_5.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_6.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_7.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/img_8.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/sample/img.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/sample/img_1.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/index.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/tsconfig.json" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 5
+}]]></component>
+  <component name="ProjectId" id="3IrmxWHwml0UhO3kdP6Ni3XZQvJ" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "/Users/chrispeng/self-learning/AI-learning/my-calender/video",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "ts.external.directory.path": "/Users/chrispeng/self-learning/AI-learning/my-calender/app/build/stage/Applications/Qoder.app/Contents/Resources/app/node_modules/typescript/lib",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/video" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-WS-251.25410.117" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="28752828-4beb-49e1-919d-d05e4946829e" name="Changes" comment="" />
+      <created>1788531308392</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1788531308392</updated>
+      <workItem from="1788531309489" duration="43128000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>
