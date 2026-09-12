@@ -1996,6 +1996,44 @@ struct ReminderPopupView: View {
     }
 }
 
+/// AppKit 原生文本框：成为真正的第一响应者，天然支持 ⌘A/⌘C/V/X/⌘Z。
+/// （SwiftUI TextField 聚焦时窗口 firstResponder 常为 NSHostingView、响应链缺字段编辑器，导致快捷键失效）
+struct AppKitTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String = ""
+    var secure: Bool = false
+
+    func makeNSView(context: Context) -> NSTextField {
+        let f = secure ? NSSecureTextField() : NSTextField()
+        f.placeholderString = placeholder
+        f.stringValue = text
+        f.delegate = context.coordinator
+        f.bezelStyle = .roundedBezel
+        f.focusRingType = .none
+        // 横向低拥抱优先级，让它在 HStack/表单里可被拉宽，观感接近 .roundedBorder
+        f.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return f
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if nsView.stringValue != text { nsView.stringValue = text }
+        nsView.placeholderString = placeholder
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: AppKitTextField
+        init(_ p: AppKitTextField) { parent = p }
+        func controlTextDidChange(_ obj: Notification) {
+            guard let f = obj.object as? NSTextField else { return }
+            parent.text = f.stringValue
+        }
+    }
+}
+
 // MARK: - 悬浮时钟（照搬 notice-clock 霓虹钟）+ 今日待办面板
 
 private extension Color {
@@ -2034,22 +2072,37 @@ func taskTimeLabel(_ e: EventItem, _ d: Date, now: Date) -> String {
 struct ClockWidgetView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var config: ConfigStore
-    @State private var now = Date()
+    @ObservedObject private var wm = WindowManager.shared
+    @State private var now = Date()          // 高频：仅驱动秒针/冒号等视觉
+    @State private var tasksNow = Date()     // 低频：待办/紧迫判定（避免高频重算 todayTasks）
     @State private var cardHovered = false
     private let ticker = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+    private let tasksTicker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        let tasks = model.todayTasks(limit: 5, now: now)
-        let urgentCount = tasks.filter { isTaskUrgent($0.0, $0.1, now: now) }.count
-        return clockFace
-            .frame(width: 160, height: 160)
-            .overlay(alignment: .topLeading) { badgeView(count: tasks.count, urgent: urgentCount).padding(8) }
-            .overlay(alignment: .top) { menuView.padding(.top, 6) }
-            .onReceive(ticker) { now = $0 }
-            .onHover { inside in
-                cardHovered = inside
-                WindowManager.shared.clockHoverChanged(inside)
+        let tasks = model.todayTasks(limit: 5, now: tasksNow)
+        let urgentCount = tasks.filter { isTaskUrgent($0.0, $0.1, now: tasksNow) }.count
+        return ZStack(alignment: .topTrailing) {
+            Color.clear   // 占满窗口，保证 hover 覆盖整块
+            clockFace
+                .padding(6)
+                .overlay(alignment: .topLeading) { badgeView(count: tasks.count, urgent: urgentCount).padding(2) }
+                .overlay(alignment: .top) { menuView }
+        }
+        .overlay(alignment: .topLeading) {
+            if wm.clockPanelOpen {
+                TodayPanelView()
+                    .padding(.leading, 10)
+                    .padding(.top, 158)
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onReceive(ticker) { now = $0 }
+        .onReceive(tasksTicker) { tasksNow = $0 }
+        .onHover { inside in
+            cardHovered = inside
+            wm.clockHoverChanged(inside)
+        }
     }
 
     var clockFace: some View {
@@ -2149,15 +2202,15 @@ struct ClockWidgetView: View {
     func badgeView(count: Int, urgent: Int) -> some View {
         Group {
             if count > 0 {
-                Button { WindowManager.shared.toggleTodoPanel() } label: {
+                Button { wm.toggleClockPanel() } label: {
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(urgent > 0 ? .white : Color(red: 0.81, green: 0.94, blue: 1))
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
                         .frame(minWidth: 18, minHeight: 18)
                         .padding(.horizontal, 5)
-                        .background(Capsule().fill(urgent > 0 ? Color.neonUrgent : Color.white.opacity(0.12)))
-                        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        .shadow(color: urgent > 0 ? Color.neonUrgent.opacity(0.8) : .clear, radius: 6)
+                        .background(Capsule().fill(Color.neonUrgent))
+                        .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                        .shadow(color: .neonUrgent.opacity(0.85), radius: 6)
                 }
                 .buttonStyle(.plain)
                 .help("今日待办")
@@ -2202,7 +2255,7 @@ struct ClockWidgetView: View {
     }
 }
 
-/// 今日待办面板（280 宽，放进独立 todoPanelWindow，悬停时钟时弹出）
+/// 今日待办面板（280 宽，与时钟同一窗体，悬停时钟时在同一窗内展开，可整体拖动）
 struct TodayPanelView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var config: ConfigStore
@@ -2250,9 +2303,7 @@ struct TodayPanelView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.12), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-        .frame(maxHeight: .infinity, alignment: .top)
         .onReceive(ticker) { now = $0 }
-        .onHover { WindowManager.shared.panelHoverChanged($0) }
     }
 
     func taskRow(_ e: EventItem, _ d: Date) -> some View {
@@ -2454,8 +2505,8 @@ struct SettingsView: View {
                      deleteHelp: String) -> some View {
         let staged = stagedColors[key]
         return HStack(spacing: 8) {
-            TextField("标签", text: label)
-                .textFieldStyle(.roundedBorder)
+            AppKitTextField(text: label, placeholder: "标签")
+                .frame(height: 22)
             // 单一圆盘取色（暂存，点「确定」才写入）
             ColorDisc(color: Binding(
                 get: { staged ?? committed },
@@ -2563,8 +2614,8 @@ struct SettingsView: View {
             }
             if showingDraft {
                 HStack(spacing: 8) {
-                    TextField("新分类名称", text: $draftLabel)
-                        .textFieldStyle(.roundedBorder)
+                    AppKitTextField(text: $draftLabel, placeholder: "新分类名称")
+                        .frame(height: 22)
                     ColorDisc(color: $draftColor)
                     Button("确定") {
                         config.addCategory(label: draftLabel.isEmpty ? "新分类" : draftLabel,
@@ -2963,9 +3014,9 @@ struct SettingsView: View {
                 .frame(width: 100, height: 90)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(config.petName.isEmpty ? "咪咪" : config.petName).font(.headline)
-                    TextField("猫咪名字", text: $config.petName)
-                        .textFieldStyle(.roundedBorder)
+                    AppKitTextField(text: $config.petName, placeholder: "猫咪名字")
                         .frame(maxWidth: 180)
+                        .frame(height: 22)
                         .onChange(of: config.petName) { _ in config.save() }
                     Text("真实猫咪视频形象（内置你的 pet1/pet2 视频轮播），也可换成自选视频")
                         .font(.caption).foregroundStyle(.secondary)
@@ -3166,10 +3217,13 @@ struct SettingsView: View {
                     // API Key 用普通 TextField（支持 ⌘A/⌘C/⌘X/⌘V），可点眼睛临时隐藏
                     HStack(spacing: 8) {
                         Image(systemName: "key").font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+                        // 显/隐必须用两个不同视图分支，NSSecureTextField 与 NSTextField 类不同、无法原地切换
                         if keyRevealed {
-                            TextField("API Key（sk-…）", text: $apiKeyText).textFieldStyle(.roundedBorder)
+                            AppKitTextField(text: $apiKeyText, placeholder: "API Key（sk-…）", secure: false)
+                                .frame(height: 22)
                         } else {
-                            SecureField("API Key（sk-…）", text: $apiKeyText).textFieldStyle(.roundedBorder)
+                            AppKitTextField(text: $apiKeyText, placeholder: "API Key（sk-…）", secure: true)
+                                .frame(height: 22)
                         }
                         Button { keyRevealed.toggle() } label: {
                             Image(systemName: keyRevealed ? "eye.slash" : "eye")
@@ -3219,11 +3273,8 @@ struct SettingsView: View {
     func aiField(icon: String, placeholder: String, text: Binding<String>, secure: Bool = false) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
-            if secure {
-                SecureField(placeholder, text: text).textFieldStyle(.roundedBorder)
-            } else {
-                TextField(placeholder, text: text).textFieldStyle(.roundedBorder)
-            }
+            AppKitTextField(text: text, placeholder: placeholder, secure: secure)
+                .frame(height: 22)
         }
     }
 
