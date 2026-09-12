@@ -1442,33 +1442,61 @@ struct PetView: View {
     @State private var mood: PetMood = .idle
     @State private var action: PetAction?
     @State private var actionStart = Date()
+    @State private var lastHoverPet = Date.distantPast   // 悬停摸摸头去抖
 
     private let cardW: CGFloat = 230
     private let cardH: CGFloat = 320
 
     var body: some View {
         Group {
-            if wm.petExpanded { expandedCard }
+            if resolvePetRender(config.petRenderMode) == .rig { standaloneCat }
+            else if wm.petExpanded { expandedCard }
             else { petBall }
         }
-        .frame(width: wm.petExpanded ? WindowManager.petCardSize.width : WindowManager.petBallSize.width,
-               height: wm.petExpanded ? WindowManager.petCardSize.height : WindowManager.petBallSize.height)
+        .frame(width: wm.petWindowSize.width, height: wm.petWindowSize.height)
+        .onChange(of: config.petRenderMode) { _ in wm.setPetExpanded(wm.petExpanded) }
         .onReceive(NotificationCenter.default.publisher(for: .petRemind)) { _ in
             withAnimation(.easeInOut(duration: 0.25)) { mood = .reminding }
             trick(.wave)
         }
         .onReceive(NotificationCenter.default.publisher(for: .petSpeak)) { note in
             let text = note.object as? String ?? ""
+            PetBrain.shared.notifyBusy(2)
             withAnimation { reaction = text; mood = .speaking }
         }
+    }
+
+    /// The desktop rig shows only the cat. Controls remain available on right-click.
+    var standaloneCat: some View {
+        PetRigView(compact: !wm.petExpanded)
+            .frame(width: wm.petWindowSize.width, height: wm.petWindowSize.height)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { wm.setPetExpanded(!wm.petExpanded) }
+            .onTapGesture { pet() }
+            .contextMenu {
+                Button("摸摸头") { pet() }
+                Button("试提醒") { remind() }
+                Divider()
+                Button(wm.petExpanded ? "缩小猫咪" : "放大猫咪") { wm.setPetExpanded(!wm.petExpanded) }
+                Button(config.petLocked ? "解锁拖动" : "锁定位置") { togglePetLock() }
+                Button("宠物设置…") { wm.showSettings(tab: 3) }
+                Divider()
+                Button("隐藏猫咪") { wm.togglePet() }
+            }
+            .help("拖动猫咪移动位置；双击切换大小；右键打开操作菜单")
     }
 
     /// 悬浮球：小型圆球默认收起，悬浮屏幕边缘，点击展开为完整卡片
     var petBall: some View {
         ZStack {
-            let videos = PetMedia.videoURLs()
-            if !videos.isEmpty {
-                PetVideoView(urls: videos)
+            let kind = resolvePetRender(config.petRenderMode)
+            if kind == .rig {
+                // 连续网格 3D 猫，头颈实时转向鼠标
+                PetRigView(compact: true)
+                    .frame(width: WindowManager.petBallSize.width, height: WindowManager.petBallSize.height)
+                    .clipShape(Circle())
+            } else if kind == .video {
+                PetVideoView(urls: PetMedia.videoURLs())
                     .frame(width: WindowManager.petBallSize.width, height: WindowManager.petBallSize.height)
                     .clipShape(Circle())
             } else {
@@ -1486,6 +1514,7 @@ struct PetView: View {
         }
         .contentShape(Circle())
         .onTapGesture { wm.setPetExpanded(true) }
+        .onHover { inside in if inside { hoverPet() } }   // 鼠标落到猫身上 = 免费摸摸头（3s 去抖）
         .overlay(Circle().stroke(cardGradient, lineWidth: 2))
         .overlay(Circle().stroke(Color.black.opacity(0.2), lineWidth: 1))
         .clipShape(Circle())
@@ -1506,17 +1535,24 @@ struct PetView: View {
                     .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 0.8))
 
                 ZStack {
-                    let videos = PetMedia.videoURLs()
-                    if !videos.isEmpty {
-                        PetVideoView(urls: videos)
+                    let kind = resolvePetRender(config.petRenderMode)
+                    if kind == .rig {
+                        PetRigView()
+                            .frame(width: cardW, height: cardH)
+                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    } else if kind == .video {
+                        PetVideoView(urls: PetMedia.videoURLs())
                             .frame(width: cardW, height: cardH)
                             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     } else {
                         PetFallbackPhotoView(mood: mood, action: action, actionStart: actionStart)
                             .frame(width: cardW, height: cardH)
                     }
-                    PersonalityAccessoryView(kind: config.effectivePersonality())
-                        .allowsHitTesting(false)
+                    // 性格配饰按旧视频构图定位，叠在写实方向帧猫上会错位成"漂浮墨镜"，rig 模式不叠
+                    if kind != .rig {
+                        PersonalityAccessoryView(kind: config.effectivePersonality())
+                            .allowsHitTesting(false)
+                    }
                 }
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(cardGradient, lineWidth: 2))
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.black.opacity(0.18), lineWidth: 1))
@@ -1630,6 +1666,7 @@ struct PetView: View {
         let kind = config.effectivePersonality()
         let text = Personality(kind: kind).baseLine(title: "测试事项", remaining: 30)
         VoiceService.shared.speakPersonality(text, kind: kind)
+        PetBrain.shared.notifyBusy(2.8)
         withAnimation { reaction = text; mood = .reminding }
         trick(.wave)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
@@ -1641,6 +1678,7 @@ struct PetView: View {
         guard let a else { return }
         action = a
         actionStart = Date()
+        PetBrain.shared.notifyBusy(a.duration + 0.3)   // 表演期间冻结视线，结束后"回过神来"追上鼠标
         withAnimation { mood = .happy }
         DispatchQueue.main.asyncAfter(deadline: .now() + a.duration + 0.1) {
             action = nil
@@ -1649,10 +1687,22 @@ struct PetView: View {
     }
 
     func pet() {
+        PetBrain.shared.notifyBusy(2.1)
         withAnimation { reaction = "喵～（蹭蹭你）"; mood = .happy }
+        // 互动时发出短促喵声；使用系统 TTS，不依赖额外音频文件，离线也可用。
+        let kind = config.effectivePersonality()
+        VoiceService.shared.speakPersonality("喵～", kind: kind)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation { reaction = nil; mood = .idle }
         }
+    }
+
+    /// 悬停摸摸头：鼠标落到猫身上触发一次 pet()，3s 去抖防刷屏
+    func hoverPet() {
+        let now = Date()
+        guard now.timeIntervalSince(lastHoverPet) > 3 else { return }
+        lastHoverPet = now
+        pet()
     }
 }
 
@@ -1996,6 +2046,44 @@ struct ReminderPopupView: View {
     }
 }
 
+/// AppKit 原生文本框：成为真正的第一响应者，天然支持 ⌘A/⌘C/V/X/⌘Z。
+/// （SwiftUI TextField 聚焦时窗口 firstResponder 常为 NSHostingView、响应链缺字段编辑器，导致快捷键失效）
+struct AppKitTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String = ""
+    var secure: Bool = false
+
+    func makeNSView(context: Context) -> NSTextField {
+        let f = secure ? NSSecureTextField() : NSTextField()
+        f.placeholderString = placeholder
+        f.stringValue = text
+        f.delegate = context.coordinator
+        f.bezelStyle = .roundedBezel
+        f.focusRingType = .none
+        // 横向低拥抱优先级，让它在 HStack/表单里可被拉宽，观感接近 .roundedBorder
+        f.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return f
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if nsView.stringValue != text { nsView.stringValue = text }
+        nsView.placeholderString = placeholder
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: AppKitTextField
+        init(_ p: AppKitTextField) { parent = p }
+        func controlTextDidChange(_ obj: Notification) {
+            guard let f = obj.object as? NSTextField else { return }
+            parent.text = f.stringValue
+        }
+    }
+}
+
 // MARK: - 悬浮时钟（照搬 notice-clock 霓虹钟）+ 今日待办面板
 
 private extension Color {
@@ -2034,22 +2122,37 @@ func taskTimeLabel(_ e: EventItem, _ d: Date, now: Date) -> String {
 struct ClockWidgetView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var config: ConfigStore
-    @State private var now = Date()
+    @ObservedObject private var wm = WindowManager.shared
+    @State private var now = Date()          // 高频：仅驱动秒针/冒号等视觉
+    @State private var tasksNow = Date()     // 低频：待办/紧迫判定（避免高频重算 todayTasks）
     @State private var cardHovered = false
     private let ticker = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+    private let tasksTicker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        let tasks = model.todayTasks(limit: 5, now: now)
-        let urgentCount = tasks.filter { isTaskUrgent($0.0, $0.1, now: now) }.count
-        return clockFace
-            .frame(width: 160, height: 160)
-            .overlay(alignment: .topLeading) { badgeView(count: tasks.count, urgent: urgentCount).padding(8) }
-            .overlay(alignment: .top) { menuView.padding(.top, 6) }
-            .onReceive(ticker) { now = $0 }
-            .onHover { inside in
-                cardHovered = inside
-                WindowManager.shared.clockHoverChanged(inside)
+        let tasks = model.todayTasks(limit: 5, now: tasksNow)
+        let urgentCount = tasks.filter { isTaskUrgent($0.0, $0.1, now: tasksNow) }.count
+        return ZStack(alignment: .topTrailing) {
+            Color.clear   // 占满窗口，保证 hover 覆盖整块
+            clockFace
+                .padding(6)
+                .overlay(alignment: .topLeading) { badgeView(count: tasks.count, urgent: urgentCount).padding(2) }
+                .overlay(alignment: .top) { menuView }
+        }
+        .overlay(alignment: .topLeading) {
+            if wm.clockPanelOpen {
+                TodayPanelView()
+                    .padding(.leading, 10)
+                    .padding(.top, 158)
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onReceive(ticker) { now = $0 }
+        .onReceive(tasksTicker) { tasksNow = $0 }
+        .onHover { inside in
+            cardHovered = inside
+            wm.clockHoverChanged(inside)
+        }
     }
 
     var clockFace: some View {
@@ -2149,15 +2252,15 @@ struct ClockWidgetView: View {
     func badgeView(count: Int, urgent: Int) -> some View {
         Group {
             if count > 0 {
-                Button { WindowManager.shared.toggleTodoPanel() } label: {
+                Button { wm.toggleClockPanel() } label: {
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(urgent > 0 ? .white : Color(red: 0.81, green: 0.94, blue: 1))
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
                         .frame(minWidth: 18, minHeight: 18)
                         .padding(.horizontal, 5)
-                        .background(Capsule().fill(urgent > 0 ? Color.neonUrgent : Color.white.opacity(0.12)))
-                        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        .shadow(color: urgent > 0 ? Color.neonUrgent.opacity(0.8) : .clear, radius: 6)
+                        .background(Capsule().fill(Color.neonUrgent))
+                        .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                        .shadow(color: .neonUrgent.opacity(0.85), radius: 6)
                 }
                 .buttonStyle(.plain)
                 .help("今日待办")
@@ -2202,7 +2305,7 @@ struct ClockWidgetView: View {
     }
 }
 
-/// 今日待办面板（280 宽，放进独立 todoPanelWindow，悬停时钟时弹出）
+/// 今日待办面板（280 宽，与时钟同一窗体，悬停时钟时在同一窗内展开，可整体拖动）
 struct TodayPanelView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var config: ConfigStore
@@ -2250,9 +2353,7 @@ struct TodayPanelView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.12), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-        .frame(maxHeight: .infinity, alignment: .top)
         .onReceive(ticker) { now = $0 }
-        .onHover { WindowManager.shared.panelHoverChanged($0) }
     }
 
     func taskRow(_ e: EventItem, _ d: Date) -> some View {
@@ -2454,8 +2555,8 @@ struct SettingsView: View {
                      deleteHelp: String) -> some View {
         let staged = stagedColors[key]
         return HStack(spacing: 8) {
-            TextField("标签", text: label)
-                .textFieldStyle(.roundedBorder)
+            AppKitTextField(text: label, placeholder: "标签")
+                .frame(height: 22)
             // 单一圆盘取色（暂存，点「确定」才写入）
             ColorDisc(color: Binding(
                 get: { staged ?? committed },
@@ -2563,8 +2664,8 @@ struct SettingsView: View {
             }
             if showingDraft {
                 HStack(spacing: 8) {
-                    TextField("新分类名称", text: $draftLabel)
-                        .textFieldStyle(.roundedBorder)
+                    AppKitTextField(text: $draftLabel, placeholder: "新分类名称")
+                        .frame(height: 22)
                     ColorDisc(color: $draftColor)
                     Button("确定") {
                         config.addCategory(label: draftLabel.isEmpty ? "新分类" : draftLabel,
@@ -2957,17 +3058,21 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 ZStack {
-                    PetFallbackPhotoView(mood: .idle)
-                    PersonalityAccessoryView(kind: config.personalityKind)
+                    if resolvePetRender(config.petRenderMode) == .rig {
+                        PetRigView(compact: true)
+                    } else {
+                        PetFallbackPhotoView(mood: .idle)
+                        PersonalityAccessoryView(kind: config.personalityKind)
+                    }
                 }
                 .frame(width: 100, height: 90)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(config.petName.isEmpty ? "咪咪" : config.petName).font(.headline)
-                    TextField("猫咪名字", text: $config.petName)
-                        .textFieldStyle(.roundedBorder)
+                    AppKitTextField(text: $config.petName, placeholder: "猫咪名字")
                         .frame(maxWidth: 180)
+                        .frame(height: 22)
                         .onChange(of: config.petName) { _ in config.save() }
-                    Text("真实猫咪视频形象（内置你的 pet1/pet2 视频轮播），也可换成自选视频")
+                    Text("跟随猫：头和瞳孔实时盯着你的鼠标；也可切回视频轮播或静态照片")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -2977,7 +3082,8 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: config.personalityKind) { _ in config.save() }
-            Text("元气=蝴蝶结 / 慵懒=睡帽 / 傲娇=皇冠 / 高冷=墨镜").font(.caption).foregroundStyle(.secondary)
+            Text("元气=蝴蝶结 / 慵懒=睡帽 / 傲娇=皇冠 / 高冷=墨镜（配饰仅视频/照片形象显示；3D 跟随猫不叠加配饰）")
+                .font(.caption).foregroundStyle(.secondary)
             Divider()
             dayPersonalitySection
             Divider()
@@ -2998,8 +3104,46 @@ struct SettingsView: View {
             Toggle("锁定宠物窗口（禁止拖拽；与日历独立）", isOn: Binding(
                 get: { config.petLocked },
                 set: { v in config.petLocked = v; config.save(); WindowManager.shared.applyPetLock() }))
-            Text("锁定后仍可点击/交互，只是不能拖动。右上角 ✕ 关闭宠物；菜单栏 📅 图标可随时重新显示。")
+            Text("锁定后仍可点击互动。3D 猫咪右键可锁定、缩放或隐藏，双击切换大小；菜单栏可重新显示。拖动后位置会自动记忆。")
                 .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Text("鼠标跟随")
+            Text("3D 猫咪通过连续颈部变形自然转头，持续注视鼠标；停住鼠标仍保持视线。关闭跟随后可以打盹。")
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("形象渲染", selection: $config.petRenderMode) {
+                Text("3D 跟随猫").tag("rig")
+                Text("视频轮播").tag("video")
+                Text("静态照片").tag("photo")
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: config.petRenderMode) { _ in config.save() }
+            Toggle("启用鼠标跟随", isOn: $config.petTrackingEnabled)
+                .onChange(of: config.petTrackingEnabled) { _ in config.save() }
+            HStack {
+                Text("反应速度").font(.caption).frame(width: 92, alignment: .leading)
+                Slider(value: $config.petFollowStiffness, in: 2...12) { editing in
+                    if !editing { config.save() }
+                }
+                Text(String(format: "%.0f", config.petFollowStiffness))
+                    .font(.caption2).foregroundStyle(.secondary).frame(width: 24)
+            }
+            HStack {
+                Text("视线范围(pt)").font(.caption).frame(width: 92, alignment: .leading)
+                Slider(value: $config.petGazeRadius, in: 100...1200, step: 50) { editing in
+                    if !editing { config.save() }
+                }
+                Text(String(format: "%.0f", config.petGazeRadius))
+                    .font(.caption2).foregroundStyle(.secondary).frame(width: 32)
+            }
+            HStack {
+                Text("打盹等待(分)").font(.caption).frame(width: 92, alignment: .leading)
+                Slider(value: Binding(
+                    get: { config.petIdleToDoze / 60 },
+                    set: { v in config.petIdleToDoze = v * 60; config.save() }),
+                       in: 2...30, step: 1)
+                Text(String(format: "%.0f", config.petIdleToDoze / 60))
+                    .font(.caption2).foregroundStyle(.secondary).frame(width: 24)
+            }
             Spacer()
         }
         .padding()
@@ -3166,10 +3310,13 @@ struct SettingsView: View {
                     // API Key 用普通 TextField（支持 ⌘A/⌘C/⌘X/⌘V），可点眼睛临时隐藏
                     HStack(spacing: 8) {
                         Image(systemName: "key").font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+                        // 显/隐必须用两个不同视图分支，NSSecureTextField 与 NSTextField 类不同、无法原地切换
                         if keyRevealed {
-                            TextField("API Key（sk-…）", text: $apiKeyText).textFieldStyle(.roundedBorder)
+                            AppKitTextField(text: $apiKeyText, placeholder: "API Key（sk-…）", secure: false)
+                                .frame(height: 22)
                         } else {
-                            SecureField("API Key（sk-…）", text: $apiKeyText).textFieldStyle(.roundedBorder)
+                            AppKitTextField(text: $apiKeyText, placeholder: "API Key（sk-…）", secure: true)
+                                .frame(height: 22)
                         }
                         Button { keyRevealed.toggle() } label: {
                             Image(systemName: keyRevealed ? "eye.slash" : "eye")
@@ -3219,11 +3366,8 @@ struct SettingsView: View {
     func aiField(icon: String, placeholder: String, text: Binding<String>, secure: Bool = false) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
-            if secure {
-                SecureField(placeholder, text: text).textFieldStyle(.roundedBorder)
-            } else {
-                TextField(placeholder, text: text).textFieldStyle(.roundedBorder)
-            }
+            AppKitTextField(text: text, placeholder: placeholder, secure: secure)
+                .frame(height: 22)
         }
     }
 

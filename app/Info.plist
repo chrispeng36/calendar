@@ -4,7 +4,11 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>桌面日历</string>
 	<key>CFBundleExecutable</key>
+	<string>MyCalendar</string>
+	<key>CFBundleIconFile</key>
 	<string>MyCalendar</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.mycalendar.app</string>
@@ -12,22 +16,22 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>桌面日历</string>
-	<key>CFBundleDisplayName</key>
-	<string>桌面日历</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.33.2</string>
+	<string>1.38.3</string>
 	<key>CFBundleVersion</key>
-	<string>58</string>
+	<string>79</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<false/>
+	<key>NSAppSleepDisabled</key>
+	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.productivity</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 MyCalendar</string>
 </dict>

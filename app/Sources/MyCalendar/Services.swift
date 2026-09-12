@@ -543,12 +543,15 @@ final class BeatWatcher {
     static let shared = BeatWatcher()
     private var lastBeat = Date()
     private var started = false
+    /// 系统睡眠期间心跳停更属正常，不算卡死（否则每次唤醒都误报"无响应 xxx s"刷屏）
+    private var systemSleeping = false
+    private var sleepObservers: [NSObjectProtocol] = []
 
     func start() {
         guard !started else { return }
         started = true
         lastBeat = Date()
-        LogStore.shared.log("🩰 心跳看门狗启动（检测主线程 >8s 无响应记为疑似卡死）")
+        LogStore.shared.log("🩰 心跳看门狗启动（检测主线程 >8s 无响应记为疑似卡死；系统睡眠期间不计）")
 
         let beater = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             guard let self = self else { return }
@@ -557,10 +560,28 @@ final class BeatWatcher {
         // 手动加入 common mode，保证拖动/缩放窗口期间心跳不中断
         RunLoop.main.add(beater, forMode: .common)
 
+        // 睡眠/唤醒感知：willSleep 置位，didWake 复位并重置心跳基线
+        let ws = NSWorkspace.shared.notificationCenter
+        sleepObservers.append(ws.addObserver(forName: NSWorkspace.willSleepNotification,
+                                             object: nil, queue: .main) { [weak self] _ in
+            self?.systemSleeping = true
+        })
+        sleepObservers.append(ws.addObserver(forName: NSWorkspace.didWakeNotification,
+                                             object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.systemSleeping = false
+            self.lastBeat = Date()
+        })
+
         // 用较高 QoS，避免 CPU 已被占满时后台线程被饿死、写不出预警日志
         DispatchQueue.global(qos: .userInteractive).async {
             while true {
                 Thread.sleep(forTimeInterval: 3)
+                // 睡眠期间/刚唤醒（主线程 observer 尚未复位）不告警，滚动基线防跨睡眠累计
+                if self.systemSleeping {
+                    self.lastBeat = Date()
+                    continue
+                }
                 let elapsed = Date().timeIntervalSince(self.lastBeat)
                 if elapsed > 8 {
                     LogStore.shared.log("⚠️ 主线程疑似繁忙/卡死：已无响应 \(Int(elapsed))s，最后一次心跳在 \(elapsed)s 前")

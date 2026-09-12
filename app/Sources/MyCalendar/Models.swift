@@ -362,6 +362,16 @@ final class ConfigStore: ObservableObject {
     @Published var aiPromptShown: Bool = false   // 首次启动的 AI 配置引导是否已展示
     @Published var calendarLocked: Bool = false  // 主日历窗口「锁定」禁止拖拽
     @Published var petLocked: Bool = false       // 宠物窗口「锁定」禁止拖拽（与日历独立）
+    // 鼠标跟随（docs/桌宠鼠标跟随集成技术方案.md §7）
+    @Published var petTrackingEnabled: Bool = true    // 跟随开关；关闭后猫只做闲置动作
+    @Published var petFollowStiffness: Double = 6     // 反应速度（弹簧刚度 2–12）
+    @Published var petGazeRadius: Double = 400        // 视线范围（pt，超出不再牵引视线）
+    @Published var petIdleToDoze: Double = 300        // 打盹等待（秒）
+    @Published var petRenderMode: String = "rig"      // 形象渲染源：rig(跟随猫)/video(视频轮播)/photo(照片)
+    @Published var petSkin: String = "default"        // 分层素材皮肤目录（pics/pet/<skin>/，P3 换装）
+    @Published var petPosX: Double = -1_000_000       // 宠物窗中心位置记忆（哨兵值=未记录，避免 NaN 入 plist）
+    @Published var petPosY: Double = -1_000_000
+    static let petPosNone: Double = -1_000_000
     @Published var dayPersonality: DayPersonality?  // 宠物当日性格（手动/AI），跨天失效
     @Published var countdownEnabled: Bool = true    // 右上角悬浮时钟是否显示（key 沿用 countdownEnabled 兼容旧存档）
 
@@ -406,6 +416,14 @@ final class ConfigStore: ObservableObject {
             "apiKey": apiKey,
             "calendarLocked": calendarLocked,
             "petLocked": petLocked,
+            "petTrackingEnabled": petTrackingEnabled,
+            "petFollowStiffness": petFollowStiffness,
+            "petGazeRadius": petGazeRadius,
+            "petIdleToDoze": petIdleToDoze,
+            "petRenderMode": petRenderMode,
+            "petSkin": petSkin,
+            "petPosX": petPosX,
+            "petPosY": petPosY,
             "dayPersonality": try! JSONEncoder().encode(dayPersonality),
             "wallpaperPath": wallpaperPath,
             "presetWallpaper": presetWallpaper,
@@ -448,6 +466,14 @@ final class ConfigStore: ObservableObject {
         if let v = dict["apiKey"] as? String { apiKey = v }
         if let v = dict["calendarLocked"] as? Bool { calendarLocked = v }
         if let v = dict["petLocked"] as? Bool { petLocked = v }
+        if let v = dict["petTrackingEnabled"] as? Bool { petTrackingEnabled = v }
+        if let v = dict["petFollowStiffness"] as? Double { petFollowStiffness = v }
+        if let v = dict["petGazeRadius"] as? Double { petGazeRadius = v }
+        if let v = dict["petIdleToDoze"] as? Double { petIdleToDoze = v }
+        if let v = dict["petRenderMode"] as? String { petRenderMode = v }
+        if let v = dict["petSkin"] as? String { petSkin = v }
+        if let v = dict["petPosX"] as? Double { petPosX = v }
+        if let v = dict["petPosY"] as? Double { petPosY = v }
         if let d = dict["dayPersonality"] as? Data,
            let p = try? JSONDecoder().decode(DayPersonality.self, from: d) { dayPersonality = p }
         if let v = dict["wallpaperPath"] as? String { wallpaperPath = v }

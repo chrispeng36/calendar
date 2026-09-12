@@ -4,8 +4,35 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="28752828-4beb-49e1-919d-d05e4946829e" name="Changes" comment="">
+    <list default="true" id="28752828-4beb-49e1-919d-d05e4946829e" name="Changes" comment="优化细节">
+      <change afterPath="$PROJECT_DIR$/docs/图生视频提示词.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docs/桌宠鼠标跟随集成技术方案.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/1.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/2.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/3.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/4.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/5.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/6.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/7.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/8.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pics/9.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/claudeCodeTabState.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/claudeCodeTabState.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/Info.plist" beforeDir="false" afterPath="$PROJECT_DIR$/app/Info.plist" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/Package.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Package.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/Sources/MyCalendar/App.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Sources/MyCalendar/App.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/Sources/MyCalendar/Models.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Sources/MyCalendar/Models.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/Sources/MyCalendar/Services.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Sources/MyCalendar/Services.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/Sources/MyCalendar/Views.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Sources/MyCalendar/Views.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_1.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_2.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_3.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_4.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_5.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_6.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_7.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pics/img_8.png" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -15,30 +42,30 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 5
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5
+}</component>
   <component name="ProjectId" id="3IrmxWHwml0UhO3kdP6Ni3XZQvJ" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "/Users/chrispeng/self-learning/AI-learning/my-calender/video",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "ts.external.directory.path": "/Users/chrispeng/self-learning/AI-learning/my-calender/app/build/stage/Applications/Qoder.app/Contents/Resources/app/node_modules/typescript/lib",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/chrispeng/self-learning/AI-learning/my-calender/video&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;/Users/chrispeng/self-learning/AI-learning/my-calender/app/build/stage/Applications/Qoder.app/Contents/Resources/app/node_modules/typescript/lib&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/video" />
@@ -59,10 +86,28 @@
       <option name="presentableId" value="Default" />
       <updated>1788531308392</updated>
       <workItem from="1788531309489" duration="44382000" />
+      <workItem from="1789179372954" duration="8119000" />
+      <workItem from="1789193070613" duration="28546000" />
+      <workItem from="1789659242075" duration="2645000" />
     </task>
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="优化细节" />
+    <option name="LAST_COMMIT_MESSAGE" value="优化细节" />
   </component>
 </project>

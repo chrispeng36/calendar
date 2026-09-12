@@ -17,6 +17,99 @@ final class DesktopPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// 带文本编辑的窗口：拦截 ⌘Z/X/C/V/A 直接发给 firstResponder（字段编辑器），
+/// 绕过主菜单 key-equivalent 校验失效的问题；并用自建快照栈实现 ⌘Z/⌘Z 撤销/重做
+/// （AppKit 字段编辑器的 undo 注册链在此环境不可靠，故不依赖 NSUndoManager）
+final class EditingWindow: NSWindow {
+    private var undoStack: [String] = []
+    private var redoStack: [String] = []
+    private var lastSnap = Date.distantPast
+
+    private var editorTextView: NSTextView? { firstResponder as? NSTextView }
+    private func currentString() -> String? {
+        if let tv = editorTextView { return tv.string }
+        if let tf = firstResponder as? NSTextField { return tf.stringValue }
+        return nil
+    }
+
+    /// 写入文本并手动触发 controlTextDidChange，让 SwiftUI Binding 同步
+    private func setString(_ s: String) {
+        let tf: NSTextField?
+        if let tv = editorTextView { tf = tv.delegate as? NSTextField } else { tf = firstResponder as? NSTextField }
+        guard let field = tf else { return }
+        editorTextView?.string = s
+        field.stringValue = s
+        (field.delegate as? NSTextFieldDelegate)?.controlTextDidChange?(
+            Notification(name: NSControl.textDidChangeNotification, object: field))
+    }
+
+    /// 记录快照：forced（粘贴/剪切前）必记；普通输入按 0.8s 停顿分组
+    private func snapshot(forced: Bool) {
+        guard let cur = currentString() else { return }
+        let now = Date()
+        if forced || now.timeIntervalSince(lastSnap) > 0.8 {
+            if undoStack.last != cur {
+                undoStack.append(cur)
+                redoStack.removeAll()
+            }
+        }
+        lastSnap = now
+    }
+
+    private func doUndo() {
+        guard let cur = currentString(), let prev = undoStack.popLast() else { return }
+        redoStack.append(cur)
+        setString(prev)
+        lastSnap = Date()
+    }
+
+    private func doRedo() {
+        guard let cur = currentString(), let next = redoStack.popLast() else { return }
+        undoStack.append(cur)
+        setString(next)
+        lastSnap = Date()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        snapshot(forced: false)
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.control),
+           let ch = event.charactersIgnoringModifiers?.lowercased() {
+            switch ch {
+            case "z":
+                if currentString() != nil {
+                    if event.modifierFlags.contains(.shift) { doRedo() } else { doUndo() }
+                    return true
+                }
+            case "v", "x":
+                snapshot(forced: true)
+                let sel = ch == "v" ? #selector(NSText.paste(_:)) : #selector(NSText.cut(_:))
+                if let fr = firstResponder, fr.responds(to: sel) {
+                    fr.perform(sel, with: nil)
+                    return true
+                }
+            case "c":
+                if let fr = firstResponder, fr.responds(to: #selector(NSText.copy(_:))) {
+                    fr.perform(#selector(NSText.copy(_:)), with: nil)
+                    return true
+                }
+            case "a":
+                if let fr = firstResponder, fr.responds(to: #selector(NSText.selectAll(_:))) {
+                    fr.perform(#selector(NSText.selectAll(_:)), with: nil)
+                    return true
+                }
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 enum DesktopWindowPlacer {
     /// 尽力将窗口放到「壁纸之上、图标之下」；结果受系统版本影响，需 M0 真机验证。
     static func apply(to win: NSWindow, pin: Bool) {
@@ -39,6 +132,14 @@ final class WindowManager: ObservableObject {
     // 宠物悬浮球/卡片尺寸
     static let petBallSize = CGSize(width: 88, height: 88)
     static let petCardSize = CGSize(width: 268, height: 428)
+    /// The photo cat gets a transparent landscape canvas, with room for its ears and paws.
+    var petWindowSize: CGSize {
+        if ConfigStore.shared.petRenderMode == "rig" {
+            return petExpanded ? CGSize(width: 330, height: 270) : CGSize(width: 230, height: 190)
+        }
+        return petExpanded ? Self.petCardSize : Self.petBallSize
+    }
+
 
     private(set) var desktopWindow: NSWindow?
     private(set) var petWindow: NSWindow?
@@ -60,9 +161,9 @@ final class WindowManager: ObservableObject {
             size = CGSize(width: 1440, height: 860)
         }
         // 常规、可缩放、带红/黄/绿交通灯（关闭/最小化/缩放）的窗口，标题栏透明让内容铺满
-        let win = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                           backing: .buffered, defer: false)
+        let win = EditingWindow(contentRect: NSRect(origin: .zero, size: size),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                backing: .buffered, defer: false)
         win.title = "桌面日历"
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
@@ -93,7 +194,7 @@ final class WindowManager: ObservableObject {
         LogStore.shared.log("[窗口] 创建宠物悬浮球…")
         let root = PetView().accentColor(ConfigStore.shared.customAccent()).environmentObject(AppModel.shared)
         let host = NSHostingController(rootView: root)
-        let size = Self.petBallSize
+        let size = petWindowSize
         // NSPanel + nonactivatingPanel：不抢焦点但可点可拖（NSWindow 用该 mask 会拖拽异常）
         let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
                                styleMask: [.borderless, .nonactivatingPanel],
@@ -106,12 +207,29 @@ final class WindowManager: ObservableObject {
         // 浮动在最上层，可点击、可拖动（不再是贴桌面层，否则会被所有窗口盖住）
         win.level = .floating
         win.collectionBehavior = [.canJoinAllSpaces]
-        if let screen = NSScreen.screens.first ?? NSScreen.main {
+        // 位置记忆：优先恢复上次中心点（校验仍在某块屏幕内，防拔显示器后猫消失在屏外）
+        let cfg = ConfigStore.shared
+        var restored = false
+        if cfg.petPosX > ConfigStore.petPosNone, cfg.petPosY > ConfigStore.petPosNone {
+            let rect = NSRect(x: cfg.petPosX - size.width / 2, y: cfg.petPosY - size.height / 2,
+                              width: size.width, height: size.height)
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(rect) }) {
+                win.setFrame(visiblePetFrame(rect), display: true)
+                restored = true
+            }
+        }
+        if !restored, let screen = NSScreen.screens.first ?? NSScreen.main {
             let f = screen.visibleFrame
             win.setFrame(NSRect(x: f.maxX - size.width - 40, y: f.minY + 40,
                                 width: size.width, height: size.height), display: true)
         }
+        // 拖动结束去抖 1s 落盘位置（展开/收起改尺寸但保中心，重复保存无害）
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification,
+                                               object: win, queue: .main) { [weak self] _ in
+            self?.schedulePetPositionSave()
+        }
         win.orderFront(nil)
+        PetBrain.shared.setEnabled(true)   // 启动鼠标跟随状态机
         LogStore.shared.log("[窗口] 宠物悬浮球已创建/显示（默认收起）")
         petWindow = win
         applyPetLock()
@@ -121,12 +239,25 @@ final class WindowManager: ObservableObject {
     func setPetExpanded(_ e: Bool) {
         guard let win = petWindow else { return }
         petExpanded = e
-        let target = e ? Self.petCardSize : Self.petBallSize
+        let target = petWindowSize
         let old = win.frame
-        win.setFrame(NSRect(x: old.midX - target.width / 2, y: old.midY - target.height / 2,
-                            width: target.width, height: target.height),
+        win.setFrame(visiblePetFrame(NSRect(x: old.midX - target.width / 2, y: old.midY - target.height / 2,
+                            width: target.width, height: target.height)),
                      display: true, animate: true)
         LogStore.shared.log("[宠物] 悬浮球\(e ? "展开" : "收起")")
+    }
+
+    /// Resizing the frameless cat must not put its head or paws off-screen.
+    private func visiblePetFrame(_ rect: NSRect) -> NSRect {
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(center) })
+                ?? NSScreen.screens.first(where: { $0.visibleFrame.intersects(rect) })
+                ?? NSScreen.main else { return rect }
+        let visible = screen.visibleFrame
+        var result = rect
+        result.origin.x = min(max(rect.minX, visible.minX), max(visible.minX, visible.maxX - rect.width))
+        result.origin.y = min(max(rect.minY, visible.minY), max(visible.minY, visible.maxY - rect.height))
+        return result
     }
 
     func showSettings(tab: Int = 0) {
@@ -138,9 +269,9 @@ final class WindowManager: ObservableObject {
         }
         let root = SettingsView().environmentObject(AppModel.shared)
         let host = NSHostingController(rootView: root)
-        let win = NSWindow(contentRect: NSRect(origin: .zero, size: CGSize(width: 840, height: 620)),
-                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                           backing: .buffered, defer: false)
+        let win = EditingWindow(contentRect: NSRect(origin: .zero, size: CGSize(width: 840, height: 620)),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                backing: .buffered, defer: false)
         win.title = "设置"
         win.contentViewController = host
         win.isReleasedWhenClosed = false
@@ -169,6 +300,23 @@ final class WindowManager: ObservableObject {
             win.orderFront(nil)
         }
         petVisible = win.isVisible
+        PetBrain.shared.setEnabled(win.isVisible)   // 隐藏时停跟随采样，省电省 CPU
+    }
+
+    /// 宠物窗拖动后去抖 1s 记忆中心点位置
+    private var petPosWork: DispatchWorkItem?
+    private func schedulePetPositionSave() {
+        petPosWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let win = self.petWindow else { return }
+            let cfg = ConfigStore.shared
+            cfg.petPosX = win.frame.midX
+            cfg.petPosY = win.frame.midY
+            cfg.save()
+            LogStore.shared.log("[宠物] 位置已记忆 (\(Int(cfg.petPosX)), \(Int(cfg.petPosY)))")
+        }
+        petPosWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     private(set) var reminderWindow: NSWindow?
@@ -194,10 +342,17 @@ final class WindowManager: ObservableObject {
         win.hasShadow = true
         win.level = .floating
         win.collectionBehavior = [.canJoinAllSpaces]
-        if let screen = NSScreen.screens.first ?? NSScreen.main {
+        // 与悬浮时钟「在一起」：优先贴在时钟正下方（右对齐）；时钟未显示时退到屏幕右上角
+        var origin: CGPoint? = nil
+        if let clock = clockWindow, clock.isVisible {
+            let cf = clock.frame
+            origin = CGPoint(x: cf.maxX - size.width, y: cf.minY - size.height - 12)
+        } else if let screen = NSScreen.screens.first ?? NSScreen.main {
             let f = screen.visibleFrame
-            win.setFrame(NSRect(x: f.midX - size.width / 2, y: f.maxY - size.height - 24,
-                                width: size.width, height: size.height), display: true)
+            origin = CGPoint(x: f.maxX - size.width - 16, y: f.maxY - size.height - 16)
+        }
+        if let o = origin {
+            win.setFrame(NSRect(origin: o, size: size), display: true)
         }
         win.orderFront(nil)
         reminderWindow = win
@@ -211,9 +366,10 @@ final class WindowManager: ObservableObject {
     // MARK: - 悬浮时钟（右上角常驻）+ 今日待办面板（悬停弹出）
 
     private(set) var clockWindow: NSWindow?
-    private(set) var todoPanelWindow: NSWindow?
+    /// 待办面板是否展开（与时钟同一窗体，展开时窗口变大）
+    @Published var clockPanelOpen = false
     static let clockSize = CGSize(width: 160, height: 160)
-    static let todoPanelSize = CGSize(width: 280, height: 184)
+    static let clockExpandedSize = CGSize(width: 300, height: 350)
     // hover 去抖（移植 notice-clock：OPEN_DELAY 220ms / CLOSE_DELAY 450ms）
     private var showPanelWork: DispatchWorkItem?
     private var hidePanelWork: DispatchWorkItem?
@@ -225,7 +381,7 @@ final class WindowManager: ObservableObject {
             .environmentObject(ConfigStore.shared)
         let host = NSHostingController(rootView: root)
         host.sizingOptions = []
-        let size = Self.clockSize
+        let size = clockPanelOpen ? Self.clockExpandedSize : Self.clockSize
         // 与宠物窗一致：NSPanel + nonactivatingPanel，不抢焦点但可点可拖
         let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
                                styleMask: [.borderless, .nonactivatingPanel],
@@ -252,7 +408,7 @@ final class WindowManager: ObservableObject {
         if on {
             if clockWindow == nil { makeClockWindow() } else { clockWindow?.orderFront(nil) }
         } else {
-            hideTodoPanel()
+            clockPanelOpen = false
             clockWindow?.orderOut(nil)
         }
         LogStore.shared.log("[窗口] 悬浮时钟 \(on ? "显示" : "隐藏")")
@@ -266,54 +422,29 @@ final class WindowManager: ObservableObject {
         setClockVisible(cfg.countdownEnabled)
     }
 
-    /// 在时钟正下方弹出今日待办面板（右对齐，紧贴圆盘）
-    func showTodoPanel() {
-        guard let clock = clockWindow else { return }
-        if todoPanelWindow == nil {
-            let root = TodayPanelView()
-                .environmentObject(AppModel.shared)
-                .environmentObject(ConfigStore.shared)
-            let host = NSHostingController(rootView: root)
-            host.sizingOptions = []
-            let size = Self.todoPanelSize
-            let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
-                                   styleMask: [.borderless, .nonactivatingPanel],
-                                   backing: .buffered, defer: false)
-            win.contentViewController = host
-            win.isOpaque = false
-            win.backgroundColor = .clear
-            win.hasShadow = false
-            win.level = .floating
-            win.collectionBehavior = [.canJoinAllSpaces]
-            todoPanelWindow = win
-        }
-        guard let win = todoPanelWindow else { return }
-        let size = Self.todoPanelSize
-        let cf = clock.frame
-        win.setFrame(NSRect(x: cf.maxX - size.width, y: cf.minY - size.height - 6,
-                            width: size.width, height: size.height), display: true)
-        win.orderFront(nil)
+    /// 展开/收起待办面板：同一窗口内改尺寸（保持右上角不动），面板与时钟一体、可整体拖动
+    func setClockPanelOpen(_ open: Bool) {
+        clockPanelOpen = open
+        guard let win = clockWindow else { return }
+        let target = open ? Self.clockExpandedSize : Self.clockSize
+        let old = win.frame
+        win.setFrame(NSRect(x: old.maxX - target.width, y: old.maxY - target.height,
+                            width: target.width, height: target.height), display: true)
     }
 
-    func hideTodoPanel() {
+    /// 徽标点击：立即切换面板展开/收起
+    func toggleClockPanel() {
         showPanelWork?.cancel(); showPanelWork = nil
         hidePanelWork?.cancel(); hidePanelWork = nil
-        todoPanelWindow?.orderOut(nil)
+        setClockPanelOpen(!clockPanelOpen)
     }
 
-    /// 徽标点击：立即切换面板显隐
-    func toggleTodoPanel() {
-        if let w = todoPanelWindow, w.isVisible { hideTodoPanel() } else {
-            hidePanelWork?.cancel(); showPanelWork?.cancel(); showTodoPanel()
-        }
-    }
-
-    /// 时钟圆盘 hover：进入→延时弹出面板；离开→延时收起
+    /// 时钟窗内 hover：进入→延时展开面板；离开→延时收起
     func clockHoverChanged(_ inside: Bool) {
         if inside {
             hidePanelWork?.cancel(); hidePanelWork = nil
-            if todoPanelWindow?.isVisible != true, showPanelWork == nil {
-                let work = DispatchWorkItem { self.showTodoPanel(); self.showPanelWork = nil }
+            if !clockPanelOpen, showPanelWork == nil {
+                let work = DispatchWorkItem { self.setClockPanelOpen(true); self.showPanelWork = nil }
                 showPanelWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
             }
@@ -323,21 +454,14 @@ final class WindowManager: ObservableObject {
         }
     }
 
-    /// 面板 hover：进入→取消收起；离开→延时收起
-    func panelHoverChanged(_ inside: Bool) {
-        if inside {
-            hidePanelWork?.cancel(); hidePanelWork = nil
-        } else {
-            scheduleHidePanel()
-        }
-    }
-
     private func scheduleHidePanel() {
+        guard clockPanelOpen else { return }
         hidePanelWork?.cancel()
-        let work = DispatchWorkItem { self.hideTodoPanel() }
+        let work = DispatchWorkItem { self.setClockPanelOpen(false) }
         hidePanelWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
     }
+
 
     /// 卡死时的逃生口：强制激活主日历 + 宠物窗口
     func reactivate() {
@@ -367,9 +491,18 @@ final class WindowManager: ObservableObject {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let bundleID = "com.mycalendar.app"
+    /// App Nap 豁免令牌（必须持有，释放即失效）
+    private var activityToken: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LogStore.shared.log("===== 应用启动 applicationDidFinishLaunching =====")
+        // 防 App Nap：浮窗应用长期无焦点时，系统会把全部定时器限流节流
+        //（实测打包版 30Hz 鼠标采样被降到 ~0.6Hz，宠物跟随冻结、倒计时时钟卡顿、提醒轮询延迟；
+        // debug 从终端启动不触发 App Nap，故开发期无法复现）。
+        // beginActivity + Info.plist NSAppSleepDisabled 双保险；仍允许系统空闲休眠，不耗电。
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "桌面宠物鼠标跟随、倒计时时钟与提醒调度需要定时器持续运行")
         BeatWatcher.shared.start()
         // 常规 App：Dock 图标可见，⌘⌥Esc 强制退出列表、Dock 右键退出都可用
         NSApp.setActivationPolicy(.regular)
@@ -432,7 +565,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(quitItem)
         appItem.submenu = appMenu
 
-        // 编辑菜单：target=nil 走响应链，文本框自动获得全选/剪切/拷贝/粘贴/撤销
+        // 编辑菜单：target=nil 走标准响应链。输入框已改为真 NSTextField（AppKitTextField），
+        // 聚焦时 firstResponder 为字段编辑器，⌘Z/X/C/V/A 由系统原生处理
         let editItem = NSMenuItem()
         mainMenu.addItem(editItem)
         let editMenu = NSMenu(title: "编辑")
