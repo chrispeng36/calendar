@@ -208,6 +208,137 @@ final class WindowManager: ObservableObject {
         reminderWindow = nil
     }
 
+    // MARK: - 悬浮时钟（右上角常驻）+ 今日待办面板（悬停弹出）
+
+    private(set) var clockWindow: NSWindow?
+    private(set) var todoPanelWindow: NSWindow?
+    static let clockSize = CGSize(width: 160, height: 160)
+    static let todoPanelSize = CGSize(width: 280, height: 184)
+    // hover 去抖（移植 notice-clock：OPEN_DELAY 220ms / CLOSE_DELAY 450ms）
+    private var showPanelWork: DispatchWorkItem?
+    private var hidePanelWork: DispatchWorkItem?
+
+    func makeClockWindow() {
+        LogStore.shared.log("[窗口] 创建悬浮时钟…")
+        let root = ClockWidgetView()
+            .environmentObject(AppModel.shared)
+            .environmentObject(ConfigStore.shared)
+        let host = NSHostingController(rootView: root)
+        host.sizingOptions = []
+        let size = Self.clockSize
+        // 与宠物窗一致：NSPanel + nonactivatingPanel，不抢焦点但可点可拖
+        let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
+                               styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: false)
+        win.contentViewController = host
+        win.isOpaque = false
+        win.backgroundColor = .clear
+        win.hasShadow = false
+        win.level = .floating
+        win.collectionBehavior = [.canJoinAllSpaces]
+        win.isMovableByWindowBackground = true
+        if let screen = NSScreen.screens.first ?? NSScreen.main {
+            let f = screen.visibleFrame
+            win.setFrame(NSRect(x: f.maxX - size.width - 16, y: f.maxY - size.height - 16,
+                                width: size.width, height: size.height), display: true)
+        }
+        win.orderFront(nil)
+        clockWindow = win
+        LogStore.shared.log("[窗口] 悬浮时钟已创建/显示")
+    }
+
+    /// 显示/隐藏悬浮时钟（设置开关与菜单栏共用，实时生效）
+    func setClockVisible(_ on: Bool) {
+        if on {
+            if clockWindow == nil { makeClockWindow() } else { clockWindow?.orderFront(nil) }
+        } else {
+            hideTodoPanel()
+            clockWindow?.orderOut(nil)
+        }
+        LogStore.shared.log("[窗口] 悬浮时钟 \(on ? "显示" : "隐藏")")
+    }
+
+    /// 菜单栏切换：翻转配置并持久化，再应用可见性
+    func toggleClock() {
+        let cfg = ConfigStore.shared
+        cfg.countdownEnabled.toggle()
+        cfg.save()
+        setClockVisible(cfg.countdownEnabled)
+    }
+
+    /// 在时钟正下方弹出今日待办面板（右对齐，紧贴圆盘）
+    func showTodoPanel() {
+        guard let clock = clockWindow else { return }
+        if todoPanelWindow == nil {
+            let root = TodayPanelView()
+                .environmentObject(AppModel.shared)
+                .environmentObject(ConfigStore.shared)
+            let host = NSHostingController(rootView: root)
+            host.sizingOptions = []
+            let size = Self.todoPanelSize
+            let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
+                                   styleMask: [.borderless, .nonactivatingPanel],
+                                   backing: .buffered, defer: false)
+            win.contentViewController = host
+            win.isOpaque = false
+            win.backgroundColor = .clear
+            win.hasShadow = false
+            win.level = .floating
+            win.collectionBehavior = [.canJoinAllSpaces]
+            todoPanelWindow = win
+        }
+        guard let win = todoPanelWindow else { return }
+        let size = Self.todoPanelSize
+        let cf = clock.frame
+        win.setFrame(NSRect(x: cf.maxX - size.width, y: cf.minY - size.height - 6,
+                            width: size.width, height: size.height), display: true)
+        win.orderFront(nil)
+    }
+
+    func hideTodoPanel() {
+        showPanelWork?.cancel(); showPanelWork = nil
+        hidePanelWork?.cancel(); hidePanelWork = nil
+        todoPanelWindow?.orderOut(nil)
+    }
+
+    /// 徽标点击：立即切换面板显隐
+    func toggleTodoPanel() {
+        if let w = todoPanelWindow, w.isVisible { hideTodoPanel() } else {
+            hidePanelWork?.cancel(); showPanelWork?.cancel(); showTodoPanel()
+        }
+    }
+
+    /// 时钟圆盘 hover：进入→延时弹出面板；离开→延时收起
+    func clockHoverChanged(_ inside: Bool) {
+        if inside {
+            hidePanelWork?.cancel(); hidePanelWork = nil
+            if todoPanelWindow?.isVisible != true, showPanelWork == nil {
+                let work = DispatchWorkItem { self.showTodoPanel(); self.showPanelWork = nil }
+                showPanelWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+            }
+        } else {
+            showPanelWork?.cancel(); showPanelWork = nil
+            scheduleHidePanel()
+        }
+    }
+
+    /// 面板 hover：进入→取消收起；离开→延时收起
+    func panelHoverChanged(_ inside: Bool) {
+        if inside {
+            hidePanelWork?.cancel(); hidePanelWork = nil
+        } else {
+            scheduleHidePanel()
+        }
+    }
+
+    private func scheduleHidePanel() {
+        hidePanelWork?.cancel()
+        let work = DispatchWorkItem { self.hideTodoPanel() }
+        hidePanelWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+    }
+
     /// 卡死时的逃生口：强制激活主日历 + 宠物窗口
     func reactivate() {
         LogStore.shared.log("[窗口] 手动重新激活主日历 + 宠物窗口")
@@ -260,6 +391,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ReminderScheduler.shared.start()
         WindowManager.shared.makeDesktopWindow()
         WindowManager.shared.makePetWindow()
+        if ConfigStore.shared.countdownEnabled {
+            WindowManager.shared.makeClockWindow()
+        }
         promptAISetupIfNeeded()
     }
 
@@ -326,6 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(makeItem("显示/隐藏 桌面日历", #selector(toggleDesktop), key: "", mods: []))
         menu.addItem(makeItem("显示/隐藏 桌面宠物", #selector(togglePet), key: "", mods: []))
+        menu.addItem(makeItem("显示/隐藏 悬浮时钟", #selector(toggleClock), key: "", mods: []))
         menu.addItem(makeItem("恢复主日历 × 宠物", #selector(reactivateMain), key: "", mods: []))
         menu.addItem(.separator())
         menu.addItem(makeItem("测试语音播报", #selector(testVoice), key: "", mods: []))
@@ -352,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func toggleDesktop() { WindowManager.shared.toggleDesktop() }
     @objc private func togglePet() { WindowManager.shared.togglePet() }
+    @objc private func toggleClock() { WindowManager.shared.toggleClock() }
     @objc private func reactivateMain() { WindowManager.shared.reactivate() }
     @objc private func testVoice() {
         let cfg = ConfigStore.shared

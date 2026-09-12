@@ -96,6 +96,68 @@ struct EventItem: Codable, Identifiable, Hashable {
     var startTime: Date { startDate } // 提醒基准时间
 
     var isDeleted: Bool { deletedAt != nil }
+
+    /// 计算「下一次发生时间」（用于倒计时悬浮窗）：
+    /// - 不重复：startDate 在未来才返回，否则 nil；
+    /// - 重复：从 startDate 按规则步进到第一个 >= now 的日期（workdays 跳过周末），设上限防死循环。
+    func nextOccurrence(after now: Date) -> Date? {
+        let cal = Calendar.current
+        switch repeatRule {
+        case .none:
+            return startDate >= now ? startDate : nil
+        case .daily, .weekly, .monthly, .yearly, .workdays:
+            guard startDate < now else { return startDate }
+            var candidate = startDate
+            for _ in 0..<400 {
+                switch repeatRule {
+                case .daily:    candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+                case .weekly:   candidate = cal.date(byAdding: .weekOfYear, value: 1, to: candidate) ?? candidate
+                case .monthly:  candidate = cal.date(byAdding: .month, value: 1, to: candidate) ?? candidate
+                case .yearly:   candidate = cal.date(byAdding: .year, value: 1, to: candidate) ?? candidate
+                case .workdays:
+                    candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+                    // 跳过周末（1=周日, 7=周六）
+                    while [1, 7].contains(cal.component(.weekday, from: candidate)) {
+                        candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+                    }
+                case .none: break
+                }
+                if candidate >= now { return candidate }
+            }
+            return nil
+        }
+    }
+
+    /// 该事件在指定「当天」（[startOfDay, +1d)）的发生时间；当天没有则 nil。
+    /// 不重复：startDate 落在当天才返回；重复：从 startDate 步进找落在当天的（设上限防死循环）。
+    func occurrence(on day: Date) -> Date? {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: day)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return nil }
+        if repeatRule == .none {
+            return (startDate >= start && startDate < end) ? startDate : nil
+        }
+        // 重复事件：若首次发生已在当天之后，则当天没有
+        if startDate >= end { return nil }
+        var candidate = startDate
+        var guardCount = 0
+        while candidate < start && guardCount < 2000 {
+            switch repeatRule {
+            case .daily:    candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+            case .weekly:   candidate = cal.date(byAdding: .weekOfYear, value: 1, to: candidate) ?? candidate
+            case .monthly:  candidate = cal.date(byAdding: .month, value: 1, to: candidate) ?? candidate
+            case .yearly:   candidate = cal.date(byAdding: .year, value: 1, to: candidate) ?? candidate
+            case .workdays:
+                candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+                while [1, 7].contains(cal.component(.weekday, from: candidate)) {
+                    candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+                }
+            case .none: break
+            }
+            guardCount += 1
+        }
+        return (candidate >= start && candidate < end) ? candidate : nil
+    }
 }
 
 // MARK: - 持久化（JSON 轻量存储）
@@ -129,6 +191,30 @@ final class AppModel: ObservableObject {
             !$0.isDeleted &&
             Calendar.current.isDate($0.startDate, inSameDayAs: day)
         }
+    }
+
+    /// 悬浮时钟「今日待办」：今天所有发生（含已过时间）按时间升序；
+    /// 不足 limit 条时，用今天之后的下次发生补齐到 limit。返回 (事项, 发生时间)。
+    func todayTasks(limit: Int = 5, now: Date = Date()) -> [(EventItem, Date)] {
+        let cal = Calendar.current
+        let startToday = cal.startOfDay(for: now)
+        guard let endToday = cal.date(byAdding: .day, value: 1, to: startToday) else { return [] }
+        var today: [(EventItem, Date)] = []
+        var future: [(EventItem, Date)] = []
+        for e in events where !e.isDeleted && !e.isDone {
+            if let td = e.occurrence(on: startToday) {
+                today.append((e, td))
+            } else if let nd = e.nextOccurrence(after: endToday) {
+                future.append((e, nd))
+            }
+        }
+        today.sort { $0.1 < $1.1 }
+        future.sort { $0.1 < $1.1 }
+        var result = today
+        if result.count < limit {
+            result.append(contentsOf: future.prefix(limit - result.count))
+        }
+        return Array(result.prefix(limit))
     }
 
     func add(_ e: EventItem) {
@@ -277,6 +363,7 @@ final class ConfigStore: ObservableObject {
     @Published var calendarLocked: Bool = false  // 主日历窗口「锁定」禁止拖拽
     @Published var petLocked: Bool = false       // 宠物窗口「锁定」禁止拖拽（与日历独立）
     @Published var dayPersonality: DayPersonality?  // 宠物当日性格（手动/AI），跨天失效
+    @Published var countdownEnabled: Bool = true    // 右上角悬浮时钟是否显示（key 沿用 countdownEnabled 兼容旧存档）
 
     private let fileURL: URL
 
@@ -325,6 +412,7 @@ final class ConfigStore: ObservableObject {
             "customBgHex": customBgHex,
             "customFgHex": customFgHex,
             "customAccentHex": customAccentHex,
+            "countdownEnabled": countdownEnabled,
         ]
         (dict as NSDictionary).write(to: fileURL, atomically: true)
     }
@@ -367,6 +455,7 @@ final class ConfigStore: ObservableObject {
         if let v = dict["customBgHex"] as? String { customBgHex = v }
         if let v = dict["customFgHex"] as? String { customFgHex = v }
         if let v = dict["customAccentHex"] as? String { customAccentHex = v }
+        if let v = dict["countdownEnabled"] as? Bool { countdownEnabled = v }
     }
 
     // MARK: - 背景墙 & 自定义色系

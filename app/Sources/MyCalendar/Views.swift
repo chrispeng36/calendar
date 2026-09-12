@@ -1996,6 +1996,286 @@ struct ReminderPopupView: View {
     }
 }
 
+// MARK: - 悬浮时钟（照搬 notice-clock 霓虹钟）+ 今日待办面板
+
+private extension Color {
+    static let neonCyan = Color(red: 0, green: 0.898, blue: 1)        // #00e5ff
+    static let neonMagenta = Color(red: 1, green: 0, blue: 0.898)     // #ff00e5
+    static let neonYellow = Color(red: 1, green: 0.902, blue: 0)      // #ffe600
+    static let neonUrgent = Color(red: 1, green: 0.231, blue: 0.361)  // #ff3b5c
+    static let neonTime = Color(red: 0.918, green: 0.988, blue: 1)    // #eafcff
+}
+
+/// 待办紧迫判定（移植 notice-clock utils.js）：全天/进行中不紧迫；今日已过期未办 或 1 小时内 → 紧迫
+func isTaskUrgent(_ e: EventItem, _ d: Date, now: Date) -> Bool {
+    if e.isAllDay { return false }
+    if let end = e.endDate, d <= now, now <= end { return false } // 进行中
+    let diff = d.timeIntervalSince(now)
+    if diff < 0 { return true }                                    // 今日已过期
+    return diff <= 3600
+}
+
+/// 待办时间标签（移植 utils.js）：非今日显示日期；全天/进行中/HH:mm 开始/已到期
+func taskTimeLabel(_ e: EventItem, _ d: Date, now: Date) -> String {
+    let cal = Calendar.current
+    if !cal.isDate(d, inSameDayAs: now) {
+        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = e.isAllDay ? "M/d 全天" : "M/d HH:mm"
+        return f.string(from: d)
+    }
+    let hm: (Date) -> String = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: $0) }
+    if e.isAllDay { return "全天" }
+    if let end = e.endDate, d <= now, now <= end { return "进行中" }
+    if d < now { return hm(d) + " 已到期" }
+    return hm(d) + " 开始"
+}
+
+/// 霓虹圆盘时钟（放进 160×160 时钟窗）：秒针弧/旋转环/刻度/时间日期/徽标/⋮菜单
+struct ClockWidgetView: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var config: ConfigStore
+    @State private var now = Date()
+    @State private var cardHovered = false
+    private let ticker = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        let tasks = model.todayTasks(limit: 5, now: now)
+        let urgentCount = tasks.filter { isTaskUrgent($0.0, $0.1, now: now) }.count
+        return clockFace
+            .frame(width: 160, height: 160)
+            .overlay(alignment: .topLeading) { badgeView(count: tasks.count, urgent: urgentCount).padding(8) }
+            .overlay(alignment: .top) { menuView.padding(.top, 6) }
+            .onReceive(ticker) { now = $0 }
+            .onHover { inside in
+                cardHovered = inside
+                WindowManager.shared.clockHoverChanged(inside)
+            }
+    }
+
+    var clockFace: some View {
+        ZStack {
+            Circle().fill(.ultraThinMaterial)
+            Circle().fill(RadialGradient(
+                colors: [Color(red: 0.11, green: 0.149, blue: 0.227).opacity(0.55),
+                         Color(red: 0.035, green: 0.043, blue: 0.075).opacity(0.68)],
+                center: UnitPoint(x: 0.5, y: 0.35), startRadius: 0, endRadius: 74))
+            // 环+刻度+秒针弧全部在一个 Canvas 里画，几何固定居中，旋转/进度由时间驱动（无 repeatForever，不会抖动游移）
+            faceCanvas
+            // 中心时间
+            VStack(spacing: 6) {
+                timeRow
+                Text(dateString)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(Color(red: 0.92, green: 0.96, blue: 1).opacity(0.55))
+            }
+        }
+        .frame(width: 148, height: 148)
+        .overlay(Circle().stroke(Color.white.opacity(0.1), lineWidth: 1))
+        .shadow(color: .neonCyan.opacity(0.18), radius: 16)
+        .shadow(color: .neonMagenta.opacity(0.09), radius: 28)
+    }
+
+    var faceCanvas: some View {
+        Canvas { ctx, size in
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            let R = size.width / 2
+
+            // 旋转 conic 外环（10s 一圈）：细线 2pt 贴边，更精致的科技感
+            let ringR = R - 2
+            var ring = Path()
+            ring.addArc(center: c, radius: ringR, startAngle: .zero, endAngle: .degrees(360), clockwise: false)
+            var ringCtx = ctx
+            ringCtx.opacity = 0.9
+            ringCtx.stroke(ring,
+                           with: .conicGradient(Gradient(colors: [.neonCyan, .neonMagenta, .neonYellow, .neonCyan]),
+                                                center: c, angle: .degrees(ringRotation)),
+                           style: StrokeStyle(lineWidth: 2))
+
+            // 60 刻度（每 5 加粗）：细线，位于秒针弧内侧
+            let tickOuter = R - 14
+            for i in 0..<60 {
+                let major = i % 5 == 0
+                let inner = tickOuter - (major ? 5.0 : 2.5)
+                let angle = Double(i) / 60 * 2 * .pi - .pi / 2
+                var p = Path()
+                p.move(to: CGPoint(x: c.x + tickOuter * cos(angle), y: c.y + tickOuter * sin(angle)))
+                p.addLine(to: CGPoint(x: c.x + inner * cos(angle), y: c.y + inner * sin(angle)))
+                ctx.stroke(p, with: .color(.white.opacity(major ? 0.5 : 0.15)),
+                           style: StrokeStyle(lineWidth: major ? 1.8 : 0.9, lineCap: .round))
+            }
+
+            // 秒针进度弧（从顶部顺时针，细线 3.5pt 带发光）
+            var arc = Path()
+            arc.addArc(center: c, radius: R - 8,
+                       startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * Double(secondFraction)),
+                       clockwise: false)
+            var glow = ctx
+            glow.addFilter(.shadow(color: .neonCyan.opacity(0.8), radius: 5))
+            glow.stroke(arc,
+                        with: .linearGradient(Gradient(colors: [.neonCyan, .neonMagenta]),
+                                              startPoint: CGPoint(x: 0, y: 0),
+                                              endPoint: CGPoint(x: size.width, y: size.height)),
+                        style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+        }
+        .frame(width: 148, height: 148)
+        .allowsHitTesting(false)
+    }
+
+    var timeRow: some View {
+        let f = Font.system(size: 23, weight: .medium, design: .monospaced)
+        let cf = Font.system(size: 16, weight: .medium, design: .monospaced)
+        return HStack(spacing: 2) {
+            Text(pad(hour)).font(f)
+            Text(":").font(cf).opacity(colonOpacity)
+            Text(pad(minute)).font(f)
+            Text(":").font(cf).opacity(colonOpacity)
+            Text(pad(second)).font(f)
+        }
+        .monospacedDigit()
+        .foregroundColor(.neonTime)
+        .shadow(color: .neonCyan.opacity(0.9), radius: 3)
+        .shadow(color: .neonCyan.opacity(0.45), radius: 8)
+    }
+
+    /// conic 环旋转角（10s 一圈），由时间驱动
+    var ringRotation: Double {
+        now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 10) / 10 * 360
+    }
+    /// 冒号脉动（约 1s 一个周期），由时间驱动
+    var colonOpacity: Double {
+        0.4 + 0.6 * (0.5 + 0.5 * sin(now.timeIntervalSinceReferenceDate * 2 * .pi))
+    }
+
+    func badgeView(count: Int, urgent: Int) -> some View {
+        Group {
+            if count > 0 {
+                Button { WindowManager.shared.toggleTodoPanel() } label: {
+                    Text("\(count)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(urgent > 0 ? .white : Color(red: 0.81, green: 0.94, blue: 1))
+                        .frame(minWidth: 18, minHeight: 18)
+                        .padding(.horizontal, 5)
+                        .background(Capsule().fill(urgent > 0 ? Color.neonUrgent : Color.white.opacity(0.12)))
+                        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                        .shadow(color: urgent > 0 ? Color.neonUrgent.opacity(0.8) : .clear, radius: 6)
+                }
+                .buttonStyle(.plain)
+                .help("今日待办")
+            }
+        }
+    }
+
+    var menuView: some View {
+        Menu {
+            Button("打开设置…") { WindowManager.shared.showSettings() }
+            Button("隐藏悬浮时钟") {
+                config.countdownEnabled = false
+                config.save()
+                WindowManager.shared.setClockVisible(false)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .opacity(cardHovered ? 1 : 0)
+    }
+
+    func pad(_ n: Int) -> String { String(format: "%02d", n) }
+    var hour: Int { Calendar.current.component(.hour, from: now) }
+    var minute: Int { Calendar.current.component(.minute, from: now) }
+    var second: Int { Calendar.current.component(.second, from: now) }
+    var secondFraction: CGFloat {
+        let t = now.timeIntervalSince1970
+        let s = t - floor(t / 60) * 60   // 当前分钟内的秒（含毫秒）
+        return CGFloat(min(max(s / 60, 0), 1))
+    }
+    var dateString: String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "yyyy年M月d日"
+        let week = ["日", "一", "二", "三", "四", "五", "六"][Calendar.current.component(.weekday, from: now) - 1]
+        return f.string(from: now) + " · 周" + week
+    }
+}
+
+/// 今日待办面板（280 宽，放进独立 todoPanelWindow，悬停时钟时弹出）
+struct TodayPanelView: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var config: ConfigStore
+    @State private var now = Date()
+    private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        let tasks = model.todayTasks(limit: 5, now: now)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("今日待办").font(.system(size: 12, weight: .semibold))
+                    .tracking(2)
+                    .foregroundColor(Color(red: 0.9, green: 0.956, blue: 1).opacity(0.85))
+                if !tasks.isEmpty {
+                    Text("\(tasks.count)").font(.system(size: 10))
+                        .foregroundColor(Color(red: 0.75, green: 0.91, blue: 1))
+                        .frame(minWidth: 16, minHeight: 16).padding(.horizontal, 4)
+                        .background(Capsule().fill(Color.white.opacity(0.12)))
+                }
+                Spacer()
+                Button { AppModel.shared.load(); now = Date() } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12))
+                        .foregroundColor(Color.white.opacity(0.6))
+                }.buttonStyle(.plain).help("刷新")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .overlay(Divider().opacity(0.25), alignment: .bottom)
+
+            VStack(alignment: .leading, spacing: 0) {
+                if tasks.isEmpty {
+                    Text("今天没有待办事项").font(.system(size: 12))
+                        .foregroundColor(Color.white.opacity(0.5))
+                        .frame(maxWidth: .infinity).padding(.vertical, 14)
+                } else {
+                    ForEach(Array(tasks.enumerated()), id: \.offset) { _, pair in
+                        taskRow(pair.0, pair.1)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(width: 280, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.07, green: 0.094, blue: 0.14).opacity(0.72)))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onReceive(ticker) { now = $0 }
+        .onHover { WindowManager.shared.panelHoverChanged($0) }
+    }
+
+    func taskRow(_ e: EventItem, _ d: Date) -> some View {
+        let urgent = isTaskUrgent(e, d, now: now)
+        let cat = config.categoryFor(e)
+        return HStack(spacing: 8) {
+            Circle().fill(cat.color).frame(width: 6, height: 6)
+                .shadow(color: cat.color.opacity(0.8), radius: 3)
+            Text(e.title).font(.system(size: 12))
+                .foregroundColor(urgent ? Color(red: 1, green: 0.56, blue: 0.65) : Color(red: 0.91, green: 0.96, blue: 1))
+                .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 4)
+            Text(taskTimeLabel(e, d, now: now))
+                .font(.system(size: 11, weight: urgent ? .bold : .regular))
+                .foregroundColor(urgent ? Color(red: 1, green: 0.36, blue: 0.47) : Color.white.opacity(0.55))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(urgent ? Color.neonUrgent.opacity(0.14) : Color.clear)
+        .overlay(Rectangle().frame(width: 2).foregroundColor(urgent ? Color.neonUrgent : .clear), alignment: .leading)
+    }
+}
+
 /// 系统调色面板的桥接（NSColorPanel 需要 NSObject target）
 final class ColorPanelBridge: NSObject {
     static let shared = ColorPanelBridge()
@@ -2649,6 +2929,14 @@ struct SettingsView: View {
                 toggleDefault(0, "准点")
             }
             Button("试听语音") { testVoice() }
+
+            Divider()
+            Text("悬浮时钟（常驻屏幕右上角；鼠标悬停圆盘弹出今日待办，今日不足 5 条自动用之后的待办补齐）:")
+            Toggle("显示悬浮时钟", isOn: $config.countdownEnabled)
+                .onChange(of: config.countdownEnabled) { _ in
+                    config.save()
+                    WindowManager.shared.setClockVisible(config.countdownEnabled)
+                }
         }
         .padding()
     }

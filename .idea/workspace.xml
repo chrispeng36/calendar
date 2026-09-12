@@ -5,21 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="28752828-4beb-49e1-919d-d05e4946829e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_1.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_2.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_3.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_4.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_5.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_6.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_7.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/pics/img_8.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/sample/img.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/sample/img_1.png" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/index.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/tsconfig.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -42,7 +28,7 @@
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "master",
+    "git-widget-placeholder": "main",
     "last_opened_file_path": "/Users/chrispeng/self-learning/AI-learning/my-calender/video",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
@@ -72,7 +58,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1788531308392</updated>
-      <workItem from="1788531309489" duration="43128000" />
+      <workItem from="1788531309489" duration="44382000" />
     </task>
     <servers />
   </component>
