@@ -363,6 +363,7 @@ final class ConfigStore: ObservableObject {
     @Published var calendarLocked: Bool = false  // 主日历窗口「锁定」禁止拖拽
     @Published var petLocked: Bool = false       // 宠物窗口「锁定」禁止拖拽（与日历独立）
     // 鼠标跟随（docs/桌宠鼠标跟随集成技术方案.md §7）
+    @Published var petActivity: PetActivity = .follow
     @Published var petTrackingEnabled: Bool = true    // 跟随开关；关闭后猫只做闲置动作
     @Published var petFollowStiffness: Double = 6     // 反应速度（弹簧刚度 2–12）
     @Published var petGazeRadius: Double = 400        // 视线范围（pt，超出不再牵引视线）
@@ -416,6 +417,7 @@ final class ConfigStore: ObservableObject {
             "apiKey": apiKey,
             "calendarLocked": calendarLocked,
             "petLocked": petLocked,
+            "petActivity": petActivity.rawValue,
             "petTrackingEnabled": petTrackingEnabled,
             "petFollowStiffness": petFollowStiffness,
             "petGazeRadius": petGazeRadius,
@@ -466,6 +468,7 @@ final class ConfigStore: ObservableObject {
         if let v = dict["apiKey"] as? String { apiKey = v }
         if let v = dict["calendarLocked"] as? Bool { calendarLocked = v }
         if let v = dict["petLocked"] as? Bool { petLocked = v }
+        if let v = dict["petActivity"] as? String { petActivity = PetActivity(rawValue: v) ?? .follow }
         if let v = dict["petTrackingEnabled"] as? Bool { petTrackingEnabled = v }
         if let v = dict["petFollowStiffness"] as? Double { petFollowStiffness = v }
         if let v = dict["petGazeRadius"] as? Double { petGazeRadius = v }

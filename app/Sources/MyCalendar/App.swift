@@ -305,7 +305,14 @@ final class WindowManager: ObservableObject {
 
     /// 宠物窗拖动后去抖 1s 记忆中心点位置
     private var petPosWork: DispatchWorkItem?
+    private var movingPetAutomatically = false
+    func movePetAutomatically(to origin: NSPoint) {
+        movingPetAutomatically = true
+        petWindow?.setFrameOrigin(origin)
+        movingPetAutomatically = false
+    }
     private func schedulePetPositionSave() {
+        guard !movingPetAutomatically else { return }
         petPosWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let win = self.petWindow else { return }

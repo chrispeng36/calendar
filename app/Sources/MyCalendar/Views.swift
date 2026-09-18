@@ -1474,6 +1474,16 @@ struct PetView: View {
             .onTapGesture(count: 2) { wm.setPetExpanded(!wm.petExpanded) }
             .onTapGesture { pet() }
             .contextMenu {
+                ForEach(PetActivity.allCases) { activity in
+                    Button {
+                        config.petActivity = activity
+                        if activity == .follow { config.petTrackingEnabled = true }
+                        config.save()
+                    } label: {
+                        Label(activity.title, systemImage: config.petActivity == activity ? "checkmark.circle.fill" : activity.symbol)
+                    }
+                }
+                Divider()
                 Button("摸摸头") { pet() }
                 Button("试提醒") { remind() }
                 Divider()
@@ -3117,6 +3127,15 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: config.petRenderMode) { _ in config.save() }
+            Picker("猫咪活动", selection: $config.petActivity) {
+                ForEach(PetActivity.allCases) { activity in Text(activity.title).tag(activity) }
+            }
+            .onChange(of: config.petActivity) { _ in
+                if config.petActivity == .follow { config.petTrackingEnabled = true }
+                config.save()
+            }
+            Text("右键猫咪也可切换活动；锁定位置会暂停漫步，鼠标移到猫咪上方也会暂时停下。")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("启用鼠标跟随", isOn: $config.petTrackingEnabled)
                 .onChange(of: config.petTrackingEnabled) { _ in config.save() }
             HStack {
