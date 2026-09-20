@@ -57,6 +57,7 @@ struct EventEditorContext: Identifiable {
 struct CalendarView: View {
     @ObservedObject var model = AppModel.shared
     @ObservedObject var config = ConfigStore.shared
+    @State private var calendarNow = Date()
     @State private var currentMonth = Date()
     @State private var selected: Date?
     @State private var editorContext: EventEditorContext?   // 窗口级编辑器（新建/编辑）
@@ -116,6 +117,9 @@ struct CalendarView: View {
         // 改为在窗口内容之上画一张 overlay 卡片，彻底消除"父窗口被模态化"这条路径。
         .overlay { editorOverlay }
         .accentColor(config.customAccent())
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { calendarNow = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in calendarNow = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in calendarNow = Date() }
     }
 
     @ViewBuilder
@@ -188,13 +192,19 @@ struct CalendarView: View {
     }
 
     var fxBackground: some View {
+        configuredBackground.opacity(config.effectiveCalendarBackgroundOpacity)
+    }
+
+    var configuredBackground: some View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
         // 背景墙优先级：用户图片 > 预设渐变 > 自定义背景色；都未设则用主题默认
         if let img = config.wallpaperImage() {
             return AnyView(
-                shape.background(
+                GeometryReader { proxy in
                     Image(nsImage: img).resizable().scaledToFill()
-                )
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                }
                 .clipShape(shape)
                 .overlay(shape.stroke(hairline, lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.3), radius: 18, y: 8))
@@ -332,13 +342,14 @@ struct CalendarView: View {
             .frame(width: 148)
 
             Button { WindowManager.shared.showSettings() } label: {
-                Image(systemName: "gearshape")
+                Label("设置", systemImage: "gearshape.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
                     .background(iconChip)
             }
             .buttonStyle(.plain)
-            .help("设置")
+            .help("设置（⌘,）")
             Button { toggleCalendarLock() } label: {
                 Image(systemName: config.calendarLocked ? "lock.fill" : "lock.open")
                     .font(.system(size: 14, weight: .semibold))
@@ -408,7 +419,7 @@ struct CalendarView: View {
 
     func dayCell(_ day: Date, height: CGFloat) -> some View {
         let events = model.events(on: day)
-        let isToday = Calendar.current.isDateInToday(day)
+        let isToday = Calendar.current.isDate(day, inSameDayAs: calendarNow)
         let inMonth = Calendar.current.isDate(day, equalTo: currentMonth, toGranularity: .month)
         let isSelected = selected.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false
         let weekend = Calendar.current.isDateInWeekend(day)
@@ -420,12 +431,17 @@ struct CalendarView: View {
                     .foregroundStyle(numberTextColor(isSelected: isSelected, isToday: isToday, inMonth: inMonth, weekend: weekend))
                     .frame(width: 30, height: 30)
                     .background {
-                        if isSelected {
-                            Circle().fill(selectionCircle).shadow(color: Color.cyan.opacity(0.6), radius: 6)
-                        } else if isToday {
+                        if isToday {
                             Circle().fill(todayCircle).shadow(color: Color.orange.opacity(0.55), radius: 6)
                         }
                     }
+                if isToday {
+                    Text("今天")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.orange))
+                }
                 Spacer(minLength: 0)
                 Text(LunarService.text(for: day))
                     .font(.system(size: 10, weight: .medium))
@@ -448,7 +464,7 @@ struct CalendarView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .top)
-        .background(cellBackground(inMonth: inMonth, isSelected: isSelected))
+        .background(cellBackground(inMonth: inMonth, isSelected: isSelected, isToday: isToday))
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .simultaneousGesture(TapGesture().onEnded { selected = day })
         .simultaneousGesture(TapGesture(count: 2).onEnded { openCompose(day) })
@@ -481,7 +497,7 @@ struct CalendarView: View {
     }
 
     func numberTextColor(isSelected: Bool, isToday: Bool, inMonth: Bool, weekend: Bool) -> Color {
-        if isSelected || isToday { return .white }
+        if isToday { return .white }
         if !inMonth { return foregroundTone.opacity(0.35) }
         if weekend { return weekendTone }
         return foregroundTone
@@ -503,22 +519,23 @@ struct CalendarView: View {
     }
 
     /// 瓷砖质感：圆角 + 半透明材质 + 细描边 + 轻投影（立体感），缝隙由 grid spacing 提供
-    func cellBackground(inMonth: Bool, isSelected: Bool) -> some View {
+    func cellBackground(inMonth: Bool, isSelected: Bool, isToday: Bool = false) -> some View {
         let tile = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        if isSelected {
-            return AnyView(
-                tile.fill(.ultraThinMaterial)
-                    .overlay(tile.fill(LinearGradient(colors: [Color.cyan.opacity(0.20), Color.blue.opacity(0.16)],
-                                                      startPoint: .topLeading, endPoint: .bottomTrailing)))
-                    .overlay(tile.stroke(Color.cyan.opacity(0.55), lineWidth: 1))
-                    .shadow(color: Color.black.opacity(0.28), radius: 5, y: 2))
-        }
-        let base: Color = inMonth ? Color.white.opacity(0.07) : Color.white.opacity(0.02)
-        return AnyView(
-            tile.fill(.ultraThinMaterial)
-                .overlay(tile.fill(base))
-                .overlay(tile.stroke(hairline, lineWidth: 0.5))
-                .shadow(color: Color.black.opacity(0.18), radius: 3, y: 1.5))
+        return tile.strokeBorder(Color.black.opacity(inMonth ? 0.48 : 0.25), lineWidth: 1.5)
+            .overlay(tile.inset(by: 2).strokeBorder(
+                config.clockColor(config.calendarFrameOuterHex).opacity(inMonth ? 0.9 : 0.45), lineWidth: 1))
+            .overlay(tile.inset(by: 5).strokeBorder(
+                Color.black.opacity(inMonth ? 0.34 : 0.17), lineWidth: 1))
+            .overlay(tile.inset(by: 6.5).strokeBorder(
+                config.clockColor(config.calendarFrameInnerHex).opacity(inMonth ? 0.8 : 0.4), lineWidth: 0.75))
+            .overlay {
+                if isToday {
+                    tile.strokeBorder(config.clockColor(config.calendarTodayFrameHex), lineWidth: 3)
+                    tile.inset(by: 5).strokeBorder(config.clockColor(config.calendarTodayFrameHex).opacity(0.8), lineWidth: 1)
+                } else if isSelected {
+                    tile.strokeBorder(config.clockColor(config.calendarSelectionFrameHex).opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                }
+            }
     }
 
     func eventChip(_ e: EventItem) -> some View {
@@ -803,7 +820,7 @@ struct CalendarTimelineView: View {
         timelineContent
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // 半透明材质：让背景壁纸/色系透出来，整体偏透明
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+        .background { if !config.desktopTransparent { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial) } }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(hairline, lineWidth: 0.5))
     }
@@ -926,7 +943,7 @@ struct CalendarTimelineView: View {
                 dayColumn(d, colH: colH, range: range)
                     .frame(maxWidth: .infinity)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.ultraThinMaterial)
+                        .fill(config.desktopTransparent ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.ultraThinMaterial))
                         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(hairline, lineWidth: 0.5)))
             }
@@ -1450,11 +1467,14 @@ struct PetView: View {
     var body: some View {
         Group {
             if resolvePetRender(config.petRenderMode) == .rig { standaloneCat }
-            else if wm.petExpanded { expandedCard }
-            else { petBall }
+            else { standaloneVideo }
         }
         .frame(width: wm.petWindowSize.width, height: wm.petWindowSize.height)
-        .onChange(of: config.petRenderMode) { _ in wm.setPetExpanded(wm.petExpanded) }
+        .onReceive(NotificationCenter.default.publisher(for: .petPointerTap)) { _ in
+            if config.petRenderMode == "rig" { pet() }
+        }
+        .onChange(of: config.petRenderMode) { _ in wm.refreshPetSize() }
+        .onChange(of: config.petActivity) { _ in wm.refreshPetSize() }
         .onReceive(NotificationCenter.default.publisher(for: .petRemind)) { _ in
             withAnimation(.easeInOut(duration: 0.25)) { mood = .reminding }
             trick(.wave)
@@ -1466,12 +1486,26 @@ struct PetView: View {
         }
     }
 
+    /// Video mode has no card, accessories, labels or pet-action controls.
+    var standaloneVideo: some View {
+        PetVideoView(urls: PetMedia.videoURLs())
+            .frame(width:wm.petWindowSize.width,height:wm.petWindowSize.height)
+            .contentShape(Rectangle())
+
+            .contextMenu {
+
+                Button(config.petLocked ? "解锁拖动" : "锁定位置") { togglePetLock() }
+                Button("宠物设置…") { wm.showSettings(tab:3) }
+                Button("隐藏视频") { wm.togglePet() }
+            }
+    }
+
     /// The desktop rig shows only the cat. Controls remain available on right-click.
     var standaloneCat: some View {
         PetRigView(compact: !wm.petExpanded)
             .frame(width: wm.petWindowSize.width, height: wm.petWindowSize.height)
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { wm.setPetExpanded(!wm.petExpanded) }
+
             .onTapGesture { pet() }
             .contextMenu {
                 ForEach(PetActivity.allCases) { activity in
@@ -1487,13 +1521,13 @@ struct PetView: View {
                 Button("摸摸头") { pet() }
                 Button("试提醒") { remind() }
                 Divider()
-                Button(wm.petExpanded ? "缩小猫咪" : "放大猫咪") { wm.setPetExpanded(!wm.petExpanded) }
+
                 Button(config.petLocked ? "解锁拖动" : "锁定位置") { togglePetLock() }
                 Button("宠物设置…") { wm.showSettings(tab: 3) }
                 Divider()
                 Button("隐藏猫咪") { wm.togglePet() }
             }
-            .help("拖动猫咪移动位置；双击切换大小；右键打开操作菜单")
+            .help("拖动猫咪移动位置；拖拽边缘调整大小；右键打开操作菜单")
     }
 
     /// 悬浮球：小型圆球默认收起，悬浮屏幕边缘，点击展开为完整卡片
@@ -1507,10 +1541,6 @@ struct PetView: View {
                     .clipShape(Circle())
             } else if kind == .video {
                 PetVideoView(urls: PetMedia.videoURLs())
-                    .frame(width: WindowManager.petBallSize.width, height: WindowManager.petBallSize.height)
-                    .clipShape(Circle())
-            } else {
-                PetFallbackPhotoView(mood: mood, action: action, actionStart: actionStart)
                     .frame(width: WindowManager.petBallSize.width, height: WindowManager.petBallSize.height)
                     .clipShape(Circle())
             }
@@ -1554,9 +1584,6 @@ struct PetView: View {
                         PetVideoView(urls: PetMedia.videoURLs())
                             .frame(width: cardW, height: cardH)
                             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    } else {
-                        PetFallbackPhotoView(mood: mood, action: action, actionStart: actionStart)
-                            .frame(width: cardW, height: cardH)
                     }
                     // 性格配饰按旧视频构图定位，叠在写实方向帧猫上会错位成"漂浮墨镜"，rig 模式不叠
                     if kind != .rig {
@@ -1720,34 +1747,7 @@ struct PetView: View {
 
 /// 宠物视频来源：用户自选 > App 内置 pet.mp4/mov
 enum PetMedia {
-    /// 宠物视频来源：用户自选 > 内置 pet1/pet2/pet（可多段循环轮播）；无视频时照片回退
-    static func videoURLs() -> [URL] {
-        var urls: [URL] = []
-        let path = ConfigStore.shared.petVideoPath
-        if !path.isEmpty, FileManager.default.fileExists(atPath: path) {
-            urls.append(URL(fileURLWithPath: path))
-        }
-        for name in ["pet1", "pet2", "pet"] {
-            for ext in ["mp4", "mov", "m4v"] {
-                if let u = Bundle.main.url(forResource: name, withExtension: ext) {
-                    urls.append(u)
-                } else if let d = devVideoURL(name, ext) {
-                    urls.append(d)
-                }
-            }
-        }
-        return urls
-    }
-
-    /// 开发回退：仓库 video/ 目录
-    private static func devVideoURL(_ name: String, _ ext: String) -> URL? {
-        let cwd = FileManager.default.currentDirectoryPath
-        for base in [cwd, (cwd as NSString).deletingLastPathComponent] {
-            let u = URL(fileURLWithPath: base).appendingPathComponent("video/\(name).\(ext)")
-            if FileManager.default.fileExists(atPath: u.path) { return u }
-        }
-        return nil
-    }
+    static func videoURLs() -> [URL] { PetVideoLibrary.urls(folder: ConfigStore.shared.petVideoFolder) }
 }
 
 /// 循环播放宠物视频（静音、等比缩放、透明底）
@@ -1766,6 +1766,8 @@ struct PetVideoView: NSViewRepresentable {
 }
 
 final class PetPlayerView: NSView {
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point:NSPoint)->NSView? { nil }
     let player = AVPlayer()
     let playerLayer = AVPlayerLayer()
     private(set) var urls: [URL] = []
@@ -1778,14 +1780,17 @@ final class PetPlayerView: NSView {
         wantsLayer = true
         layer?.addSublayer(playerLayer)
         playerLayer.player = player
-        playerLayer.videoGravity = .resizeAspectFill
-        playerLayer.backgroundColor = NSColor(calibratedWhite: 0, alpha: 0.35).cgColor
+        playerLayer.videoGravity = .resizeAspect
+        playerLayer.backgroundColor = NSColor.clear.cgColor
         player.isMuted = true
         player.actionAtItemEnd = .none
         // 每段视频播完切到下一段，形成多段轮播/单段循环
         endToken = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
-        ) { [weak self] _ in self?.advance() }
+         ) { [weak self] note in
+            guard let self, let item=note.object as? AVPlayerItem, item === self.player.currentItem else { return }
+            self.advance()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1820,9 +1825,9 @@ final class PetPlayerView: NSView {
     func resumePlayback() { guard !urls.isEmpty else { return }; player.play() }
 
     func load(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
         self.urls = urls
         idx = 0
+        guard !urls.isEmpty else { player.pause(); player.replaceCurrentItem(with:nil); return }
         playCurrent()
     }
 
@@ -2129,6 +2134,12 @@ func taskTimeLabel(_ e: EventItem, _ d: Date, now: Date) -> String {
 }
 
 /// 霓虹圆盘时钟（放进 160×160 时钟窗）：秒针弧/旋转环/刻度/时间日期/徽标/⋮菜单
+struct ClockPlateView: View {
+    let color: Color
+    let opacity: Double
+    var body: some View { Circle().fill(color.opacity(opacity)) }
+}
+
 struct ClockWidgetView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var config: ConfigStore
@@ -2148,12 +2159,18 @@ struct ClockWidgetView: View {
                 .padding(6)
                 .overlay(alignment: .topLeading) { badgeView(count: tasks.count, urgent: urgentCount).padding(2) }
                 .overlay(alignment: .top) { menuView }
+                .scaleEffect(config.clockScale, anchor: .topTrailing)
+                .frame(width:160*config.clockScale,height:160*config.clockScale,alignment:.topTrailing)
+                .overlay(alignment: .bottomLeading) {
+                    ClockResizeHandle().frame(width:26,height:26)
+                        .accessibilityLabel("拖动调整时钟大小")
+                }
         }
         .overlay(alignment: .topLeading) {
             if wm.clockPanelOpen {
                 TodayPanelView()
                     .padding(.leading, 10)
-                    .padding(.top, 158)
+                    .padding(.top, 160*config.clockScale)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2161,17 +2178,17 @@ struct ClockWidgetView: View {
         .onReceive(tasksTicker) { tasksNow = $0 }
         .onHover { inside in
             cardHovered = inside
-            wm.clockHoverChanged(inside)
+
         }
     }
 
+    var outerRingColor: Color { config.clockColor(config.clockOuterHex) }
+    var innerRingColor: Color { config.clockColor(config.clockInnerHex) }
+    var digitsColor: Color { config.clockColor(config.clockDigitsHex) }
+
     var clockFace: some View {
         ZStack {
-            Circle().fill(.ultraThinMaterial)
-            Circle().fill(RadialGradient(
-                colors: [Color(red: 0.11, green: 0.149, blue: 0.227).opacity(0.55),
-                         Color(red: 0.035, green: 0.043, blue: 0.075).opacity(0.68)],
-                center: UnitPoint(x: 0.5, y: 0.35), startRadius: 0, endRadius: 74))
+            ClockPlateView(color: config.clockColor(config.clockPlateHex), opacity: config.clockPlateOpacity)
             // 环+刻度+秒针弧全部在一个 Canvas 里画，几何固定居中，旋转/进度由时间驱动（无 repeatForever，不会抖动游移）
             faceCanvas
             // 中心时间
@@ -2179,13 +2196,13 @@ struct ClockWidgetView: View {
                 timeRow
                 Text(dateString)
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(Color(red: 0.92, green: 0.96, blue: 1).opacity(0.55))
+                    .foregroundColor(digitsColor.opacity(0.7))
             }
         }
         .frame(width: 148, height: 148)
         .overlay(Circle().stroke(Color.white.opacity(0.1), lineWidth: 1))
-        .shadow(color: .neonCyan.opacity(0.18), radius: 16)
-        .shadow(color: .neonMagenta.opacity(0.09), radius: 28)
+        .shadow(color: outerRingColor.opacity(0.18), radius: 16)
+        .shadow(color: innerRingColor.opacity(0.09), radius: 28)
     }
 
     var faceCanvas: some View {
@@ -2200,7 +2217,7 @@ struct ClockWidgetView: View {
             var ringCtx = ctx
             ringCtx.opacity = 0.9
             ringCtx.stroke(ring,
-                           with: .conicGradient(Gradient(colors: [.neonCyan, .neonMagenta, .neonYellow, .neonCyan]),
+                           with: .conicGradient(Gradient(colors: [outerRingColor.opacity(0.35), outerRingColor, outerRingColor.opacity(0.65), outerRingColor.opacity(0.35)]),
                                                 center: c, angle: .degrees(ringRotation)),
                            style: StrokeStyle(lineWidth: 2))
 
@@ -2213,7 +2230,7 @@ struct ClockWidgetView: View {
                 var p = Path()
                 p.move(to: CGPoint(x: c.x + tickOuter * cos(angle), y: c.y + tickOuter * sin(angle)))
                 p.addLine(to: CGPoint(x: c.x + inner * cos(angle), y: c.y + inner * sin(angle)))
-                ctx.stroke(p, with: .color(.white.opacity(major ? 0.5 : 0.15)),
+                ctx.stroke(p, with: .color(innerRingColor.opacity(major ? 0.65 : 0.25)),
                            style: StrokeStyle(lineWidth: major ? 1.8 : 0.9, lineCap: .round))
             }
 
@@ -2223,9 +2240,9 @@ struct ClockWidgetView: View {
                        startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * Double(secondFraction)),
                        clockwise: false)
             var glow = ctx
-            glow.addFilter(.shadow(color: .neonCyan.opacity(0.8), radius: 5))
+            glow.addFilter(.shadow(color: innerRingColor.opacity(0.8), radius: 5))
             glow.stroke(arc,
-                        with: .linearGradient(Gradient(colors: [.neonCyan, .neonMagenta]),
+                        with: .linearGradient(Gradient(colors: [innerRingColor.opacity(0.55), innerRingColor]),
                                               startPoint: CGPoint(x: 0, y: 0),
                                               endPoint: CGPoint(x: size.width, y: size.height)),
                         style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
@@ -2245,9 +2262,9 @@ struct ClockWidgetView: View {
             Text(pad(second)).font(f)
         }
         .monospacedDigit()
-        .foregroundColor(.neonTime)
-        .shadow(color: .neonCyan.opacity(0.9), radius: 3)
-        .shadow(color: .neonCyan.opacity(0.45), radius: 8)
+        .foregroundColor(digitsColor)
+        .shadow(color: digitsColor.opacity(0.6), radius: 3)
+        .shadow(color: digitsColor.opacity(0.25), radius: 8)
     }
 
     /// conic 环旋转角（10s 一圈），由时间驱动
@@ -2261,8 +2278,7 @@ struct ClockWidgetView: View {
 
     func badgeView(count: Int, urgent: Int) -> some View {
         Group {
-            if count > 0 {
-                Button { wm.toggleClockPanel() } label: {
+            Button { wm.toggleClockPanel() } label: {
                     Text("\(count)")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.white)
@@ -2273,8 +2289,8 @@ struct ClockWidgetView: View {
                         .shadow(color: .neonUrgent.opacity(0.85), radius: 6)
                 }
                 .buttonStyle(.plain)
-                .help("今日待办")
-            }
+                .help(wm.clockPanelOpen ? "点击收起今日待办" : "点击查看今日待办")
+                .accessibilityLabel("今日待办，点击展开或收起")
         }
     }
 
@@ -2722,6 +2738,7 @@ struct SettingsView: View {
     var appearanceTab: some View {
         Form {
             Section("主题") {
+                if !config.usesWallpaperBackground {
                 Picker("主题", selection: $config.theme) {
                     ForEach(Theme.allCases, id: \.self) { t in
                         Text("\(t.label) — \(t.tagline)").tag(t)
@@ -2729,15 +2746,19 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .onChange(of: config.theme) { _ in config.save() }
+                }
                 // 主题颜色也可直接用调色盘（圆盘）自定义
-                paletteRow("背景色", keyPath: \.customBgHex)
+                if !config.usesWallpaperBackground {
+                    paletteRow("背景色", keyPath: \.customBgHex)
+                }
                 paletteRow("文本色", keyPath: \.customFgHex)
                 paletteRow("强调色", keyPath: \.customAccentHex)
-                Text("用圆盘可直接改主题的背景/文本/强调色；点「清除」回落到所选主题默认。")
+                Text(config.usesWallpaperBackground ? "正在使用背景墙，背景色由壁纸决定；仍可调整文本色和强调色。" : "用圆盘可调整颜色；点「清除」回落到主题默认。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("恢复默认外观") { config.resetAppearance() }
             }
             Section("背景墙") {
+                if config.wallpaperPath.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(Self.wallpaperPresets) { p in
                         Button { config.presetWallpaper = p.id; config.save() } label: {
@@ -2752,6 +2773,7 @@ struct SettingsView: View {
                         .help(p.label)
                     }
                 }
+                }
                 HStack {
                     Button(config.wallpaperPath.isEmpty ? "选择背景图片…" : "更换背景图片…") { chooseWallpaper() }
                     if !config.wallpaperPath.isEmpty {
@@ -2759,12 +2781,72 @@ struct SettingsView: View {
                             .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption)
                     }
                 }
-                Text("生效优先级：背景图片 > 预设颜色 > 自定义色；都不设则用上方主题。")
+                Text("背景透明度控制图片、预设颜色或主题的显示强度，可在下方窗口设置中调节。")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("日期格双层边框") {
+                ColorPicker("外层边框", selection: colorBinding(\.calendarFrameOuterHex), supportsOpacity: false)
+                ColorPicker("内层边框", selection: colorBinding(\.calendarFrameInnerHex), supportsOpacity: false)
+                ColorPicker("今天边框", selection: colorBinding(\.calendarTodayFrameHex), supportsOpacity: false)
+                ColorPicker("选中日期边框", selection: colorBinding(\.calendarSelectionFrameHex), supportsOpacity: false)
+                Text("仅调整相框边线颜色，中心仍然镂空。").font(.caption).foregroundStyle(.secondary)
+                Button("恢复边框默认颜色") {
+                    config.calendarFrameOuterHex = "#FFFFFF"
+                    config.calendarFrameInnerHex = "#FFFFFF"
+                    config.calendarTodayFrameHex = "#FF9500"
+                    config.calendarSelectionFrameHex = "#00D5FF"
+                    config.save()
+                }
+            }
+            Section("悬浮时钟外观") {
+                ColorPicker("背景盘颜色", selection: colorBinding(\.clockPlateHex), supportsOpacity: false)
+                HStack {
+                    Text("背景盘透明度")
+                    Slider(value: Binding(get: { 1-config.clockPlateOpacity },
+                        set: { config.clockPlateOpacity = 1-$0 }), in:0...1, step:0.01) { editing in
+                        if !editing { config.save() }
+                    }
+                    Text("\(Int((1-config.clockPlateOpacity)*100))%").monospacedDigit().frame(width:44)
+                }
+                HStack {
+                    Text("时钟大小")
+                    Slider(value: Binding(get: { config.clockScale },
+                        set: { WindowManager.shared.resizeClock(scale:$0) }), in:0.75...2.5, step:0.05) { editing in
+                        if !editing { config.save() }
+                    }
+                    Text("\(Int(config.clockScale*100))%").monospacedDigit().frame(width:44)
+                }
+                Text("也可拖拽时钟左下角调整大小。点击红色圆点展开或收起事项；悬停不会展开。透明度只影响背景盘。")
+                    .font(.caption).foregroundStyle(.secondary)
+                ColorPicker("外环", selection: colorBinding(\.clockOuterHex), supportsOpacity: false)
+                ColorPicker("内环与刻度", selection: colorBinding(\.clockInnerHex), supportsOpacity: false)
+                ColorPicker("时间与日期数字", selection: colorBinding(\.clockDigitsHex), supportsOpacity: false)
+                Button("恢复时钟默认颜色") {
+                    config.clockPlateHex = "#182638"
+                    config.clockOuterHex = "#55DFFF"
+                    config.clockInnerHex = "#FF73D4"
+                    config.clockDigitsHex = "#EAF5FF"
+                    config.save()
+                }
             }
             Section("窗口") {
                 Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktopPin).onChange(of: config.desktopPin) { _ in config.save() }
-                Toggle("透明磨砂背景", isOn: $config.desktopTransparent).onChange(of: config.desktopTransparent) { _ in config.save() }
+                HStack {
+                    Text("背景透明度")
+                    Slider(value: Binding(
+                        get: { 1-config.effectiveCalendarBackgroundOpacity },
+                        set: { value in
+                            config.desktopTransparent = true
+                            config.calendarBackgroundOpacity = 1-value
+                        }), in:0...1, step:0.01) { editing in
+                            if !editing { config.save() }
+                        }
+                        .accessibilityLabel("日历背景透明度")
+                    Text("\(Int((1-config.effectiveCalendarBackgroundOpacity)*100))%")
+                        .monospacedDigit().frame(width:46,alignment:.trailing)
+                }
+                Text("100% 完全透明，可直接看到桌面墙纸；0% 显示完整背景。只调整背景，文字和事项保持清晰。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("桌面层使用未公开窗口层级，若在你的系统上被遮挡/异常，可关闭「贴到桌面层」改为悬浮窗口。").font(.caption)
             }
         }
@@ -3007,11 +3089,11 @@ struct SettingsView: View {
         let content: String
         switch kind {
         case .ics:
-            panel.nameFieldStringValue = "桌面日历.ics"
+            panel.nameFieldStringValue = "宠物日历.ics"
             panel.allowedContentTypes = [.text]
             content = EventExporter.ics(AppModel.shared.events)
         case .csv:
-            panel.nameFieldStringValue = "桌面日历.csv"
+            panel.nameFieldStringValue = "宠物日历.csv"
             panel.allowedContentTypes = [.commaSeparatedText]
             content = EventExporter.csv(AppModel.shared.events)
         }
@@ -3042,7 +3124,7 @@ struct SettingsView: View {
             Button("试听语音") { testVoice() }
 
             Divider()
-            Text("悬浮时钟（常驻屏幕右上角；鼠标悬停圆盘弹出今日待办，今日不足 5 条自动用之后的待办补齐）:")
+            Text("悬浮时钟（常驻屏幕右上角；点击红色圆点展开今日待办，今日不足 5 条自动用之后的待办补齐）:")
             Toggle("显示悬浮时钟", isOn: $config.countdownEnabled)
                 .onChange(of: config.countdownEnabled) { _ in
                     config.save()
@@ -3071,8 +3153,7 @@ struct SettingsView: View {
                     if resolvePetRender(config.petRenderMode) == .rig {
                         PetRigView(compact: true)
                     } else {
-                        PetFallbackPhotoView(mood: .idle)
-                        PersonalityAccessoryView(kind: config.personalityKind)
+                        PetVideoView(urls: PetMedia.videoURLs())
                     }
                 }
                 .frame(width: 100, height: 90)
@@ -3082,48 +3163,56 @@ struct SettingsView: View {
                         .frame(maxWidth: 180)
                         .frame(height: 22)
                         .onChange(of: config.petName) { _ in config.save() }
-                    Text("跟随猫：头和瞳孔实时盯着你的鼠标；也可切回视频轮播或静态照片")
+                    Text("3D 跟随猫自然转头注视鼠标；视频模式循环播放内置的 video 目录视频。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text("性格（决定语音语速、提醒文案与外观配饰）")
+            Text("性格（决定语音语速与提醒文案）")
             Picker("性格", selection: $config.personalityKind) {
                 ForEach(Personality.Kind.all, id: \.self) { k in Text(k.label).tag(k) }
             }
             .pickerStyle(.segmented)
             .onChange(of: config.personalityKind) { _ in config.save() }
-            Text("元气=蝴蝶结 / 慵懒=睡帽 / 傲娇=皇冠 / 高冷=墨镜（配饰仅视频/照片形象显示；3D 跟随猫不叠加配饰）")
+            Text("性格影响语音和提醒文案；视频保持原始画面，不叠加配饰。")
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
             dayPersonalitySection
             Divider()
             Text("宠物视频")
-            Text("已内置 pet1.mp4 / pet2.mp4 两段猫咪视频，自动循环轮播。")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("选择自定义视频…") { pickVideo() }
-                if !config.petVideoPath.isEmpty {
-                    Button("移除视频") { config.petVideoPath = ""; config.save() }
-                    Text(URL(fileURLWithPath: config.petVideoPath).lastPathComponent)
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("视频播放文件夹").font(.headline)
+                Text(config.petVideoFolder.isEmpty ? "内置视频" : config.petVideoFolder)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("选择文件夹…") { pickVideoFolder() }
+                    Button("刷新列表") { config.objectWillChange.send() }
+                    Button("恢复内置视频") {
+                        config.petVideoFolder = ""
+                        config.save()
+                    }.disabled(config.petVideoFolder.isEmpty)
                 }
+                let count = PetMedia.videoURLs().count
+                Text(count > 0
+                    ? "共 \(count) 段视频，按文件名顺序静音循环播放。支持 MP4、MOV、M4V，仅播放文件夹内的文件，不含子文件夹。"
+                    : "文件夹无法访问或没有可播放的视频，请重新选择文件夹或恢复内置视频。")
+                    .font(.caption).foregroundStyle(count > 0 ? Color.secondary : Color.orange)
             }
-            Text("自定义视频（mp4/mov）优先于内置视频，会循环播放；建议竖屏、纯色或透明背景。")
-                .font(.caption).foregroundStyle(.secondary)
             Divider()
             Toggle("锁定宠物窗口（禁止拖拽；与日历独立）", isOn: Binding(
                 get: { config.petLocked },
                 set: { v in config.petLocked = v; config.save(); WindowManager.shared.applyPetLock() }))
-            Text("锁定后仍可点击互动。3D 猫咪右键可锁定、缩放或隐藏，双击切换大小；菜单栏可重新显示。拖动后位置会自动记忆。")
+            Text("锁定后仍可点击互动。3D 猫咪右键可锁定或隐藏，拖拽边缘调整大小；菜单栏可重新显示。拖动后位置会自动记忆。")
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
             Text("鼠标跟随")
             Text("3D 猫咪通过连续颈部变形自然转头，持续注视鼠标；停住鼠标仍保持视线。关闭跟随后可以打盹。")
                 .font(.caption).foregroundStyle(.secondary)
+            Text("拖拽宠物展示区域的边缘或四角可调整大小，尺寸会自动保存；按住猫咪主体可拖动位置。")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("形象渲染", selection: $config.petRenderMode) {
                 Text("3D 跟随猫").tag("rig")
                 Text("视频轮播").tag("video")
-                Text("静态照片").tag("photo")
             }
             .pickerStyle(.segmented)
             .onChange(of: config.petRenderMode) { _ in config.save() }
@@ -3134,7 +3223,7 @@ struct SettingsView: View {
                 if config.petActivity == .follow { config.petTrackingEnabled = true }
                 config.save()
             }
-            Text("右键猫咪也可切换活动；锁定位置会暂停漫步，鼠标移到猫咪上方也会暂时停下。")
+            Text("右键猫咪也可切换活动；锁定位置会暂停漫步；切换其他软件不会打断猫咪活动。")
                 .font(.caption).foregroundStyle(.secondary)
             Toggle("启用鼠标跟随", isOn: $config.petTrackingEnabled)
                 .onChange(of: config.petTrackingEnabled) { _ in config.save() }
@@ -3290,21 +3379,27 @@ struct SettingsView: View {
         }
     }
 
-    func pickVideo() {
+    func pickVideoFolder() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "选择一段猫咪视频（将循环播放）"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("MyCalendar", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let dest = dir.appendingPathComponent("pet_video.\(url.pathExtension)")
-        try? FileManager.default.removeItem(at: dest)
-        if (try? FileManager.default.copyItem(at: url, to: dest)) != nil {
-            config.petVideoPath = dest.path
-            config.save()
+        panel.prompt = "选择文件夹"
+        panel.message = "选择包含 MP4、MOV 或 M4V 视频的文件夹"
+        if !config.petVideoFolder.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: config.petVideoFolder, isDirectory: true)
         }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard !PetVideoLibrary.files(in: url).isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "这个文件夹没有可播放的视频"
+            alert.informativeText = "请选择直接包含 MP4、MOV 或 M4V 文件的文件夹；子文件夹不参与轮播。当前播放列表保持不变。"
+            alert.runModal()
+            return
+        }
+        config.petVideoFolder = url.path
+        config.petRenderMode = "video"
+        config.save()
     }
 
     var aiTab: some View {

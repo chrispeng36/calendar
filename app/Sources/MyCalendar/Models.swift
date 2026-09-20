@@ -338,6 +338,8 @@ final class ConfigStore: ObservableObject {
     @Published var petName: String
     @Published var personalityKind: Personality.Kind
     @Published var desktopPin: Bool = false      // 贴桌面层（默认关：钉住会沉到图标层导致点不动/拖不动）
+    @Published var calendarBackgroundOpacity: Double = 0
+    var effectiveCalendarBackgroundOpacity: Double { desktopTransparent ? calendarBackgroundOpacity : 1 }
     @Published var desktopTransparent: Bool
     @Published var voiceEnabled: Bool
     @Published var voiceRate: Float
@@ -347,10 +349,27 @@ final class ConfigStore: ObservableObject {
     // 背景墙 & 自定义色系（覆盖字段：空值=用主题默认，非空=用户自定义）
     @Published var wallpaperPath: String = ""        // 本机背景图片路径，空=未设置
     @Published var presetWallpaper: String = "theme" // theme/sunset/ocean/forest/midnight/sakura/custom
+    var usesWallpaperBackground: Bool {
+        !wallpaperPath.isEmpty || !["", "theme", "custom"].contains(presetWallpaper)
+    }
+    @Published var calendarFrameOuterHex: String = "#FFFFFF"
+    @Published var calendarFrameInnerHex: String = "#FFFFFF"
+    @Published var calendarTodayFrameHex: String = "#FF9500"
+    @Published var calendarSelectionFrameHex: String = "#00D5FF"
+    @Published var clockPlateHex: String = "#182638"
+    @Published var clockPlateOpacity: Double = 0.8
+    @Published var clockScale: Double = 1
+    @Published var clockOuterHex: String = "#55DFFF"
+    @Published var clockInnerHex: String = "#FF73D4"
+    @Published var clockDigitsHex: String = "#EAF5FF"
+    func clockColor(_ hex: String) -> Color {
+        Color(nsColor: HexColor.nsColor(fromHex: hex) ?? .white)
+    }
     @Published var customBgHex: String = ""          // 自定义背景色（#RRGGBB）
     @Published var customFgHex: String = ""          // 自定义文本色
     @Published var customAccentHex: String = ""      // 自定义强调色
     @Published var reminderDefaults: [Int]   // 提前分钟数集合
+    @Published var petVideoFolder: String = ""
     @Published var petVideoPath: String = "" // 用户自选的宠物视频（循环播放取代照片形象）
     @Published var categoryLabels: [String: String] = [:]  // 颜色分类标签（用户可配置）
     @Published var categoryColors: [String: String] = [:]  // 颜色分类的自定义色值（hex，#RRGGBB）
@@ -371,6 +390,8 @@ final class ConfigStore: ObservableObject {
     @Published var petRenderMode: String = "rig"      // 形象渲染源：rig(跟随猫)/video(视频轮播)/photo(照片)
     @Published var petSkin: String = "default"        // 分层素材皮肤目录（pics/pet/<skin>/，P3 换装）
     @Published var petPosX: Double = -1_000_000       // 宠物窗中心位置记忆（哨兵值=未记录，避免 NaN 入 plist）
+    @Published var petWidth: Double = 0
+    @Published var petHeight: Double = 0
     @Published var petPosY: Double = -1_000_000
     static let petPosNone: Double = -1_000_000
     @Published var dayPersonality: DayPersonality?  // 宠物当日性格（手动/AI），跨天失效
@@ -400,6 +421,8 @@ final class ConfigStore: ObservableObject {
             "personalityKind": personalityKind.rawValue,
             "desktopPin": desktopPin,
             "desktopTransparent": desktopTransparent,
+            "calendarBackgroundOpacity": calendarBackgroundOpacity,
+            "calendarClearBackgroundV1": true,
             "voiceEnabled": voiceEnabled,
             "voiceRate": voiceRate,
             "onlineTTS": onlineTTS,
@@ -407,6 +430,7 @@ final class ConfigStore: ObservableObject {
             "transparentPet": transparentPet,
             "reminderDefaults": reminderDefaults,
             "petVideoPath": petVideoPath,
+            "petVideoFolder": petVideoFolder,
             "categoryLabels": try! JSONEncoder().encode(categoryLabels),
             "categoryColors": try! JSONEncoder().encode(categoryColors),
             "customCategories": try! JSONEncoder().encode(customCategories),
@@ -424,12 +448,24 @@ final class ConfigStore: ObservableObject {
             "petIdleToDoze": petIdleToDoze,
             "petRenderMode": petRenderMode,
             "petSkin": petSkin,
+            "petWidth": petWidth,
+            "petHeight": petHeight,
             "petPosX": petPosX,
             "petPosY": petPosY,
             "dayPersonality": try! JSONEncoder().encode(dayPersonality),
             "wallpaperPath": wallpaperPath,
             "presetWallpaper": presetWallpaper,
             "customBgHex": customBgHex,
+            "calendarFrameOuterHex": calendarFrameOuterHex,
+            "calendarFrameInnerHex": calendarFrameInnerHex,
+            "calendarTodayFrameHex": calendarTodayFrameHex,
+            "calendarSelectionFrameHex": calendarSelectionFrameHex,
+            "clockPlateHex": clockPlateHex,
+            "clockPlateOpacity": clockPlateOpacity,
+            "clockScale": clockScale,
+            "clockOuterHex": clockOuterHex,
+            "clockInnerHex": clockInnerHex,
+            "clockDigitsHex": clockDigitsHex,
             "customFgHex": customFgHex,
             "customAccentHex": customAccentHex,
             "countdownEnabled": countdownEnabled,
@@ -443,12 +479,17 @@ final class ConfigStore: ObservableObject {
         if let v = dict["personalityKind"] as? String, let k = Personality.Kind(rawValue: v) { personalityKind = k }
         if let v = dict["desktopPin"] as? Bool { desktopPin = v }
         if let v = dict["desktopTransparent"] as? Bool { desktopTransparent = v }
+        if dict["calendarClearBackgroundV1"] as? Bool != true { desktopTransparent = true }
+        if let v = dict["calendarBackgroundOpacity"] as? Double, v.isFinite {
+            calendarBackgroundOpacity = min(1,max(0,v))
+        }
         if let v = dict["voiceEnabled"] as? Bool { voiceEnabled = v }
         if let v = dict["voiceRate"] as? Float { voiceRate = v }
         if let v = dict["onlineTTS"] as? Bool { onlineTTS = v }
         if let v = dict["theme"] as? String, let t = Theme(rawValue: v) { theme = t }
         if let v = dict["transparentPet"] as? Bool { transparentPet = v }
         if let v = dict["reminderDefaults"] as? [Int] { reminderDefaults = v }
+        if let v = dict["petVideoFolder"] as? String { petVideoFolder = v }
         if let v = dict["petVideoPath"] as? String { petVideoPath = v }
         if let d = dict["categoryLabels"] as? Data,
            let map = try? JSONDecoder().decode([String: String].self, from: d) { categoryLabels = map }
@@ -473,14 +514,26 @@ final class ConfigStore: ObservableObject {
         if let v = dict["petFollowStiffness"] as? Double { petFollowStiffness = v }
         if let v = dict["petGazeRadius"] as? Double { petGazeRadius = v }
         if let v = dict["petIdleToDoze"] as? Double { petIdleToDoze = v }
-        if let v = dict["petRenderMode"] as? String { petRenderMode = v }
+        if let v = dict["petRenderMode"] as? String { petRenderMode = v == "video" ? "video" : "rig" }
         if let v = dict["petSkin"] as? String { petSkin = v }
+        if let v = dict["petWidth"] as? Double, v.isFinite { petWidth = min(1200, max(0, v)) }
+        if let v = dict["petHeight"] as? Double, v.isFinite { petHeight = min(1000, max(0, v)) }
         if let v = dict["petPosX"] as? Double { petPosX = v }
         if let v = dict["petPosY"] as? Double { petPosY = v }
         if let d = dict["dayPersonality"] as? Data,
            let p = try? JSONDecoder().decode(DayPersonality.self, from: d) { dayPersonality = p }
         if let v = dict["wallpaperPath"] as? String { wallpaperPath = v }
         if let v = dict["presetWallpaper"] as? String { presetWallpaper = v }
+        if let v = dict["calendarFrameOuterHex"] as? String, HexColor.nsColor(fromHex:v) != nil { calendarFrameOuterHex = v }
+        if let v = dict["calendarFrameInnerHex"] as? String, HexColor.nsColor(fromHex:v) != nil { calendarFrameInnerHex = v }
+        if let v = dict["calendarTodayFrameHex"] as? String, HexColor.nsColor(fromHex:v) != nil { calendarTodayFrameHex = v }
+        if let v = dict["calendarSelectionFrameHex"] as? String, HexColor.nsColor(fromHex:v) != nil { calendarSelectionFrameHex = v }
+        if let v = dict["clockPlateHex"] as? String, HexColor.nsColor(fromHex:v) != nil { clockPlateHex = v }
+        if let v = dict["clockPlateOpacity"] as? Double, v.isFinite { clockPlateOpacity = min(1,max(0,v)) }
+        if let v = dict["clockScale"] as? Double, v.isFinite { clockScale = min(2.5,max(0.75,v)) }
+        if let v = dict["clockOuterHex"] as? String, HexColor.nsColor(fromHex:v) != nil { clockOuterHex = v }
+        if let v = dict["clockInnerHex"] as? String, HexColor.nsColor(fromHex:v) != nil { clockInnerHex = v }
+        if let v = dict["clockDigitsHex"] as? String, HexColor.nsColor(fromHex:v) != nil { clockDigitsHex = v }
         if let v = dict["customBgHex"] as? String { customBgHex = v }
         if let v = dict["customFgHex"] as? String { customFgHex = v }
         if let v = dict["customAccentHex"] as? String { customAccentHex = v }
@@ -1132,7 +1185,7 @@ enum ResourceLoader {
 
 enum EventExporter {
     static func ics(_ events: [EventItem]) -> String {
-        var lines: [String] = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//MyCalendar//桌面日历//CN", "CALSCALE:GREGORIAN"]
+        var lines: [String] = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//MyCalendar//宠物日历//CN", "CALSCALE:GREGORIAN"]
         for e in events where !e.isDeleted {
             lines.append("BEGIN:VEVENT")
             lines.append("UID:\(e.id.uuidString)")

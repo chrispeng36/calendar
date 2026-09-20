@@ -5,23 +5,23 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>桌面日历</string>
+	<string>宠物日历</string>
 	<key>CFBundleExecutable</key>
 	<string>MyCalendar</string>
 	<key>CFBundleIconFile</key>
-	<string>MyCalendar</string>
+	<string>PetCalendar</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.mycalendar.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>桌面日历</string>
+	<string>宠物日历</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.39.0</string>
+	<string>1.40.9</string>
 	<key>CFBundleVersion</key>
-	<string>82</string>
+	<string>100</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
