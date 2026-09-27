@@ -6,9 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="28752828-4beb-49e1-919d-d05e4946829e" name="Changes" comment="优化细节">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/Info.plist" beforeDir="false" afterPath="$PROJECT_DIR$/app/Info.plist" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/Sources/MyCalendar/App.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Sources/MyCalendar/App.swift" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/Sources/MyCalendar/Views.swift" beforeDir="false" afterPath="$PROJECT_DIR$/app/Sources/MyCalendar/Views.swift" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -64,7 +62,7 @@
       <workItem from="1788531309489" duration="44382000" />
       <workItem from="1789179372954" duration="8119000" />
       <workItem from="1789193070613" duration="28546000" />
-      <workItem from="1789659242075" duration="24984000" />
+      <workItem from="1789659242075" duration="26973000" />
     </task>
     <task id="LOCAL-00001" summary="优化细节">
       <option name="closed" value="true" />
@@ -90,7 +88,15 @@
       <option name="project" value="LOCAL" />
       <updated>1789921710187</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="优化细节">
+      <option name="closed" value="true" />
+      <created>1790530594846</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1790530594846</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

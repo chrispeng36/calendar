@@ -510,6 +510,11 @@ final class WindowManager: ObservableObject {
         if finished { ConfigStore.shared.save() }
     }
 
+    func moveClock(to origin: NSPoint) {
+        guard let win = clockWindow else { return }
+        win.setFrame(visiblePetFrame(NSRect(origin: origin, size: win.frame.size)), display: true)
+    }
+
     private func updateClockFrame() {
         guard let win = clockWindow else { return }
         let target = clockWindowSize
@@ -527,9 +532,9 @@ final class WindowManager: ObservableObject {
         host.sizingOptions = []
         let size = clockWindowSize
         // 与宠物窗一致：NSPanel + nonactivatingPanel，不抢焦点但可点可拖
-        let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
-                               styleMask: [.borderless, .nonactivatingPanel],
-                               backing: .buffered, defer: false)
+        let win = ClockInteractionPanel(contentRect: NSRect(origin: .zero, size: size),
+                                        styleMask: [.borderless, .nonactivatingPanel],
+                                        backing: .buffered, defer: false)
         win.contentViewController = host
         win.isOpaque = false
         win.backgroundColor = .clear
@@ -537,7 +542,7 @@ final class WindowManager: ObservableObject {
         win.level = .floating
         win.hidesOnDeactivate = false
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        win.isMovableByWindowBackground = true
+        win.isMovableByWindowBackground = false
         if let screen = NSScreen.screens.first ?? NSScreen.main {
             let f = screen.visibleFrame
             win.setFrame(NSRect(x: f.maxX - size.width - 16, y: f.maxY - size.height - 16,
@@ -571,6 +576,9 @@ final class WindowManager: ObservableObject {
     func setClockPanelOpen(_ open: Bool) {
         clockPanelOpen = open
         updateClockFrame()
+        if ConfigStore.shared.petShown, petWindow?.isVisible == true {
+            PetBrain.shared.setEnabled(true)
+        }
     }
 
     /// Only the red badge toggles the task panel; hovering never changes it.
