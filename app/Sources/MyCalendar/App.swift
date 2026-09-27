@@ -128,6 +128,9 @@ final class CalendarWindow: EditingWindow {
         }
         super.sendEvent(event)
     }
+    override func performClose(_ sender: Any?) {
+        (NSApp.delegate as? AppDelegate)?.closeCalendarAndCompanions()
+    }
 }
 
 final class CalendarHostingView<Content: View>: NSHostingView<Content> {
@@ -231,6 +234,11 @@ final class WindowManager: ObservableObject {
     }
 
     func makePetWindow() {
+        guard ConfigStore.shared.petShown else {
+            petVisible = false
+            PetBrain.shared.setEnabled(false)
+            return
+        }
         LogStore.shared.log("[窗口] 创建宠物悬浮球…")
         let root = PetView().accentColor(ConfigStore.shared.customAccent()).environmentObject(AppModel.shared)
         let host = NSHostingController(rootView: root)
@@ -349,13 +357,17 @@ final class WindowManager: ObservableObject {
         }
         let root = SettingsView().environmentObject(AppModel.shared)
         let host = NSHostingController(rootView: root)
+        host.sizingOptions = []
         let win = EditingWindow(contentRect: NSRect(origin: .zero, size: CGSize(width: 840, height: 620)),
                                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                 backing: .buffered, defer: false)
         win.title = "设置"
         win.contentViewController = host
+        win.contentMinSize = NSSize(width: 720, height: 460)
+        win.isMovableByWindowBackground = false
+        win.setFrameAutosaveName("PetCalendarSettingsWindow")
         win.isReleasedWhenClosed = false
-        win.center()
+        if !win.setFrameUsingName("PetCalendarSettingsWindow") { win.center() }
         // makeKeyAndOrderFront：让设置窗真正成为 key，文本框的 ⌘A/⌘C/⌘V/⌘X 编辑快捷键才能路由生效
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -363,25 +375,53 @@ final class WindowManager: ObservableObject {
     }
 
     func toggleDesktop() {
-        guard let win = desktopWindow else { return }
-        if win.isVisible { win.orderOut(nil) } else { win.orderFront(nil) }
-        desktopVisible = win.isVisible
+        guard let win = desktopWindow else { makeDesktopWindow(); return }
+        if win.isVisible {
+            closeCalendarAndCompanions()
+        } else {
+            reopenCalendar()
+        }
     }
 
-    func togglePet() {
-        guard let win = petWindow else { return }
-        LogStore.shared.log("[窗口] 切换宠物窗口可见性（当前 \(win.isVisible)）")
-        if win.isVisible {
-            win.orderOut(nil)
-            // 宠物窗隐藏后若它曾是 key，需把主日历窗重新设为 key 并激活，避免主窗失去交互/点不动
-            if let d = desktopWindow { d.makeKeyAndOrderFront(nil) }
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            win.orderFront(nil)
-        }
-        petVisible = win.isVisible
-        PetBrain.shared.setEnabled(win.isVisible)   // 隐藏时停跟随采样，省电省 CPU
+    func closeCalendarAndCompanions() {
+        desktopWindow?.orderOut(nil)
+        petWindow?.orderOut(nil)
+        petVisible = false
+        PetBrain.shared.setEnabled(false)
+        clockWindow?.orderOut(nil)
+        setClockPanelOpen(false)
+        desktopVisible = false
+        LogStore.shared.log("[窗口] 日历关闭：一并隐藏日历、宠物和时钟；Dock 点击可恢复")
     }
+
+    func reopenCalendar() {
+        if desktopWindow == nil { makeDesktopWindow() }
+        guard let win = desktopWindow else { return }
+        DesktopWindowPlacer.apply(to:win,pin:ConfigStore.shared.desktopPin)
+        win.makeKeyAndOrderFront(nil)
+        desktopVisible = true
+        if ConfigStore.shared.petShown { setPetVisible(true) }
+        if ConfigStore.shared.countdownEnabled { setClockVisible(true) }
+        NSApp.activate(ignoringOtherApps:true)
+    }
+
+    func setPetVisible(_ visible: Bool) {
+        let cfg = ConfigStore.shared
+        cfg.petShown = visible
+        cfg.save()
+        if visible {
+            if petWindow == nil { makePetWindow() }
+            petWindow?.orderFront(nil)
+            petVisible = petWindow != nil
+            PetBrain.shared.setEnabled(petVisible)
+        } else {
+            petWindow?.orderOut(nil)
+            petVisible = false
+            PetBrain.shared.setEnabled(false)
+        }
+    }
+
+    func togglePet() { setPetVisible(!ConfigStore.shared.petShown) }
 
     /// 宠物窗拖动后去抖 1s 记忆中心点位置
     private var petPosWork: DispatchWorkItem?
@@ -570,6 +610,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// App Nap 豁免令牌（必须持有，释放即失效）
     private var activityToken: NSObjectProtocol?
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        WindowManager.shared.reopenCalendar()
+        return true
+    }
+
+    func closeCalendarAndCompanions() {
+        WindowManager.shared.closeCalendarAndCompanions()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         LogStore.shared.log("===== 应用启动 applicationDidFinishLaunching =====")
         // 防 App Nap：浮窗应用长期无焦点时，系统会把全部定时器限流节流
@@ -599,7 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         ReminderScheduler.shared.start()
         WindowManager.shared.makeDesktopWindow()
-        WindowManager.shared.makePetWindow()
+        if ConfigStore.shared.petShown { WindowManager.shared.makePetWindow() }
         if ConfigStore.shared.countdownEnabled {
             WindowManager.shared.makeClockWindow()
         }

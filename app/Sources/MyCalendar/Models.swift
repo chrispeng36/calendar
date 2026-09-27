@@ -380,6 +380,7 @@ final class ConfigStore: ObservableObject {
     @Published var apiKey: String
     @Published var aiPromptShown: Bool = false   // 首次启动的 AI 配置引导是否已展示
     @Published var calendarLocked: Bool = false  // 主日历窗口「锁定」禁止拖拽
+    @Published var petShown: Bool = true        // 启动/重新打开时是否显示桌面宠物
     @Published var petLocked: Bool = false       // 宠物窗口「锁定」禁止拖拽（与日历独立）
     // 鼠标跟随（docs/桌宠鼠标跟随集成技术方案.md §7）
     @Published var petActivity: PetActivity = .follow
@@ -440,6 +441,7 @@ final class ConfigStore: ObservableObject {
             "aiPromptShown": aiPromptShown,
             "apiKey": apiKey,
             "calendarLocked": calendarLocked,
+            "petShown": petShown,
             "petLocked": petLocked,
             "petActivity": petActivity.rawValue,
             "petTrackingEnabled": petTrackingEnabled,
@@ -508,6 +510,7 @@ final class ConfigStore: ObservableObject {
         if let v = dict["aiPromptShown"] as? Bool { aiPromptShown = v }
         if let v = dict["apiKey"] as? String { apiKey = v }
         if let v = dict["calendarLocked"] as? Bool { calendarLocked = v }
+        if let v = dict["petShown"] as? Bool { petShown = v }
         if let v = dict["petLocked"] as? Bool { petLocked = v }
         if let v = dict["petActivity"] as? String { petActivity = PetActivity(rawValue: v) ?? .follow }
         if let v = dict["petTrackingEnabled"] as? Bool { petTrackingEnabled = v }

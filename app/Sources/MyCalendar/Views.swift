@@ -2521,6 +2521,31 @@ struct SettingsView: View {
     @State private var draftLabel = ""
     @State private var draftColor: Color = .blue
 
+    enum AppearanceSection: String, CaseIterable, Identifiable {
+        case theme, wallpaper, frames, clock, window
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .theme: return "主题与配色"
+            case .wallpaper: return "壁纸"
+            case .frames: return "日期格边框"
+            case .clock: return "悬浮时钟"
+            case .window: return "窗口与透明度"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .theme: return "paintpalette"
+            case .wallpaper: return "photo"
+            case .frames: return "square.on.square"
+            case .clock: return "clock"
+            case .window: return "macwindow"
+            }
+        }
+    }
+    @State private var appearanceSection: AppearanceSection = .theme
+    @State private var appearanceExpanded = true
+
     /// 设置分类（左侧栏条目）
     struct SettingsCategory: Identifiable {
         let id: Int; let title: String; let icon: String
@@ -2538,20 +2563,64 @@ struct SettingsView: View {
     // 仿 macOS 系统设置：左侧栏选分类，右侧显示对应细节
     var body: some View {
         HStack(spacing: 0) {
-            List(selection: $router.tab) {
-                ForEach(Self.categories) { c in
-                    Label(c.title, systemImage: c.icon).tag(c.id)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Self.categories) { c in
+                        HStack(spacing: 2) {
+                            Button {
+                                router.tab = c.id
+                                if c.id == 1 { appearanceExpanded = true }
+                            } label: {
+                                Label(c.title, systemImage: c.icon)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10).padding(.vertical, 9)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            if c.id == 1 {
+                                Button {
+                                    appearanceExpanded.toggle()
+                                } label: {
+                                    Image(systemName: appearanceExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.caption).frame(width:24,height:30)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(appearanceExpanded ? "收起外观子目录" : "展开外观子目录")
+                            }
+                        }
+                        .background(RoundedRectangle(cornerRadius: 7)
+                            .fill(router.tab == c.id ? Color.accentColor.opacity(0.14) : .clear))
+                        if c.id == 1 && appearanceExpanded {
+                            ForEach(AppearanceSection.allCases) { section in
+                                Button {
+                                    appearanceSection = section
+                                    router.tab = 1
+                                } label: {
+                                    Label(section.title, systemImage: section.icon)
+                                        .font(.callout)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.leading, 28).padding(.trailing, 8).padding(.vertical, 8)
+                                        .contentShape(Rectangle())
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(
+                                            router.tab == 1 && appearanceSection == section
+                                            ? Color.accentColor.opacity(0.22) : .clear))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
+                .padding(10)
             }
-            .listStyle(.sidebar)
-            .frame(width: 178)
+            .frame(width: 210)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
 
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(width: 840, height: 620)
+        .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity)
         .accentColor(config.customAccent())
         .onAppear {
             apiKeyText = ConfigStore.shared.apiKey
@@ -2736,9 +2805,37 @@ struct SettingsView: View {
     ]
 
     var appearanceTab: some View {
-        Form {
-            Section("主题") {
-                if !config.usesWallpaperBackground {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("外观").foregroundStyle(.secondary)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                Text(appearanceSection.title).fontWeight(.semibold)
+                Spacer()
+            }
+            .padding(20)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    switch appearanceSection {
+                    case .theme: appearanceTheme
+                    case .wallpaper: appearanceWallpaper
+                    case .frames: appearanceFrames
+                    case .clock: appearanceClock
+                    case .window: appearanceWindow
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+            }
+            .scrollIndicators(.visible)
+            .id(appearanceSection)
+        }
+    }
+
+    var appearanceTheme: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("主题").font(.title2.bold())
+if !config.usesWallpaperBackground {
                 Picker("主题", selection: $config.theme) {
                     ForEach(Theme.allCases, id: \.self) { t in
                         Text("\(t.label) — \(t.tagline)").tag(t)
@@ -2756,9 +2853,13 @@ struct SettingsView: View {
                 Text(config.usesWallpaperBackground ? "正在使用背景墙，背景色由壁纸决定；仍可调整文本色和强调色。" : "用圆盘可调整颜色；点「清除」回落到主题默认。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("恢复默认外观") { config.resetAppearance() }
-            }
-            Section("背景墙") {
-                if config.wallpaperPath.isEmpty {
+        }
+    }
+
+    var appearanceWallpaper: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("背景墙").font(.title2.bold())
+if config.wallpaperPath.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(Self.wallpaperPresets) { p in
                         Button { config.presetWallpaper = p.id; config.save() } label: {
@@ -2781,11 +2882,15 @@ struct SettingsView: View {
                             .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption)
                     }
                 }
-                Text("背景透明度控制图片、预设颜色或主题的显示强度，可在下方窗口设置中调节。")
+                Text("背景透明度控制图片、预设颜色或主题的显示强度，可在「外观 → 窗口与透明度」中调节。")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("日期格双层边框") {
-                ColorPicker("外层边框", selection: colorBinding(\.calendarFrameOuterHex), supportsOpacity: false)
+        }
+    }
+
+    var appearanceFrames: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("日期格双层边框").font(.title2.bold())
+ColorPicker("外层边框", selection: colorBinding(\.calendarFrameOuterHex), supportsOpacity: false)
                 ColorPicker("内层边框", selection: colorBinding(\.calendarFrameInnerHex), supportsOpacity: false)
                 ColorPicker("今天边框", selection: colorBinding(\.calendarTodayFrameHex), supportsOpacity: false)
                 ColorPicker("选中日期边框", selection: colorBinding(\.calendarSelectionFrameHex), supportsOpacity: false)
@@ -2797,9 +2902,13 @@ struct SettingsView: View {
                     config.calendarSelectionFrameHex = "#00D5FF"
                     config.save()
                 }
-            }
-            Section("悬浮时钟外观") {
-                ColorPicker("背景盘颜色", selection: colorBinding(\.clockPlateHex), supportsOpacity: false)
+        }
+    }
+
+    var appearanceClock: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("悬浮时钟外观").font(.title2.bold())
+ColorPicker("背景盘颜色", selection: colorBinding(\.clockPlateHex), supportsOpacity: false)
                 HStack {
                     Text("背景盘透明度")
                     Slider(value: Binding(get: { 1-config.clockPlateOpacity },
@@ -2828,9 +2937,13 @@ struct SettingsView: View {
                     config.clockDigitsHex = "#EAF5FF"
                     config.save()
                 }
-            }
-            Section("窗口") {
-                Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktopPin).onChange(of: config.desktopPin) { _ in config.save() }
+        }
+    }
+
+    var appearanceWindow: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("窗口").font(.title2.bold())
+Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktopPin).onChange(of: config.desktopPin) { _ in config.save() }
                 HStack {
                     Text("背景透明度")
                     Slider(value: Binding(
@@ -2848,9 +2961,7 @@ struct SettingsView: View {
                 Text("100% 完全透明，可直接看到桌面墙纸；0% 显示完整背景。只调整背景，文字和事项保持清晰。")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("桌面层使用未公开窗口层级，若在你的系统上被遮挡/异常，可关闭「贴到桌面层」改为悬浮窗口。").font(.caption)
-            }
         }
-        .padding()
     }
 
     /// 主题调色行：标签 + 单一圆盘 + 清除
@@ -3123,13 +3234,6 @@ struct SettingsView: View {
             }
             Button("试听语音") { testVoice() }
 
-            Divider()
-            Text("悬浮时钟（常驻屏幕右上角；点击红色圆点展开今日待办，今日不足 5 条自动用之后的待办补齐）:")
-            Toggle("显示悬浮时钟", isOn: $config.countdownEnabled)
-                .onChange(of: config.countdownEnabled) { _ in
-                    config.save()
-                    WindowManager.shared.setClockVisible(config.countdownEnabled)
-                }
         }
         .padding()
     }
@@ -3150,11 +3254,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 ZStack {
-                    if resolvePetRender(config.petRenderMode) == .rig {
-                        PetRigView(compact: true)
-                    } else {
-                        PetVideoView(urls: PetMedia.videoURLs())
-                    }
+                    Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                        .resizable().scaledToFit().padding(8)
                 }
                 .frame(width: 100, height: 90)
                 VStack(alignment: .leading, spacing: 6) {
@@ -3165,6 +3266,20 @@ struct SettingsView: View {
                         .onChange(of: config.petName) { _ in config.save() }
                     Text("3D 跟随猫自然转头注视鼠标；视频模式循环播放内置的 video 目录视频。")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            GroupBox("桌面显示") {
+                VStack(alignment: .leading, spacing: 8) {
+                Toggle("显示桌面宠物", isOn: Binding(
+                    get: { config.petShown },
+                    set: { WindowManager.shared.setPetVisible($0) }))
+                Toggle("显示悬浮时钟", isOn: $config.countdownEnabled)
+                    .onChange(of: config.countdownEnabled) { _ in
+                        config.save()
+                        WindowManager.shared.setClockVisible(config.countdownEnabled)
+                    }
+                Text("关闭日历窗口会同时隐藏宠物和时钟；点击 Dock 图标可恢复已启用的窗口。")
+                    .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Text("性格（决定语音语速与提醒文案）")
