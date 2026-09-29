@@ -3,7 +3,13 @@ import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum ExportKind { case ics, csv }
+enum ExportKind: String, CaseIterable, Identifiable {
+    case csv, ics, report
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .csv: return "CSV 表格"; case .ics: return "ICS 日历"; case .report: return "AI 复盘报告（Markdown）" }
+    }
+}
 
 // MARK: - 月历网格计算
 
@@ -57,6 +63,7 @@ struct EventEditorContext: Identifiable {
 struct CalendarView: View {
     @ObservedObject var model = AppModel.shared
     @ObservedObject var config = ConfigStore.shared
+    @ObservedObject var holidays = HolidayCalendar.shared
     @State private var calendarNow = Date()
     @State private var currentMonth = Date()
     @State private var selected: Date?
@@ -68,35 +75,42 @@ struct CalendarView: View {
         selectedEventID.flatMap { id in model.events.first { $0.id == id && !$0.isDeleted } }
     }
 
-    private let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
+    private let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(spacing: 6) {
+            VStack(spacing: mode == .month ? 3 : 6) {
                 header
-                if !config.llm.enabled || config.apiKey.isEmpty {
-                    aiBanner
-                }
                 switch mode {
                 case .month:
                     weekdayRow
                     grid
                     legend
-                case .day, .week:
-                    CalendarTimelineView(dates: timelineDates,
-                                         onSelect: { selected = $0 },
-                                         onSelectEvent: { selectedEventID = $0.id },
-                                         onCompose: { d, ex in openCompose(d, editing: ex) })
-                case .year:
-                    YearView(year: currentMonth) { m in
-                        mode = .month
-                        currentMonth = m
-                        selected = Calendar.current.date(
-                            from: Calendar.current.dateComponents([.year, .month], from: m))
+                case .day:
+                    GeometryReader { geo in
+                        let day = selected ?? Date()
+                        dayCell(day, height: geo.size.height, displayMonth: day)
                     }
+                case .week:
+                    weekdayRow
+                    GeometryReader { geo in
+                        HStack(spacing: 2) {
+                            let dates = weekDates(selected ?? Date())
+                            Text("\(Calendar(identifier: .iso8601).component(.weekOfYear, from: dates.first ?? Date()))")
+                                .font(.appScaled(size: config.calendarWeekNumberFontSize, weight: .medium))
+                                .foregroundStyle(foregroundTone.opacity(0.8))
+                                .frame(width: 28)
+                            ForEach(dates, id: \.self) { day in
+                                dayCell(day, height: geo.size.height, displayMonth: day)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                case .year:
+                    yearGrid
                 }
             }
-            .padding(.init(top: 18, leading: 12, bottom: 8, trailing: 12))
+            .padding(.init(top: mode == .month ? 8 : 12, leading: 12, bottom: 5, trailing: 12))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             // 右侧详情面板：作为界面一部分常驻，非弹出框
@@ -109,6 +123,7 @@ struct CalendarView: View {
                 .frame(width: 292)
             }
         }
+        .font(.appBody)
         .foregroundStyle(foregroundTone)
         .background(fxBackground.ignoresSafeArea())
         // 窗口内联编辑器：不再用 .sheet。macOS 的 sheet 是独立模态窗口，会把同为 NSWindow 的
@@ -120,6 +135,13 @@ struct CalendarView: View {
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { calendarNow = $0 }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in calendarNow = Date() }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in calendarNow = Date() }
+        .onAppear { holidays.checkForUpdates(around: Calendar.current.component(.year, from: currentMonth)) }
+        .onChange(of: currentMonth) { month in
+            holidays.checkForUpdates(around: Calendar.current.component(.year, from: month))
+        }
+        .onChange(of: selected) { date in
+            if let date { holidays.checkForUpdates(around: Calendar.current.component(.year, from: date)) }
+        }
     }
 
     @ViewBuilder
@@ -131,15 +153,15 @@ struct CalendarView: View {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
                         Image(systemName: ctx.existing == nil ? "plus.circle.fill" : "pencil.circle.fill")
-                            .font(.system(size: 15))
+                            .font(.appScaled(size: 15))
                             .foregroundStyle(config.customAccent())
                         Text(ctx.existing == nil ? "新建事项" : "编辑事项")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.appScaled(size: 14, weight: .semibold))
                             .foregroundStyle(.primary)
                         Spacer()
                         Button { editorContext = nil } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 16))
+                                .font(.appScaled(size: 16))
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
@@ -174,9 +196,9 @@ struct CalendarView: View {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
                 Text("AI 助理未配置 — 点击选择模型、填写接口地址与 API Key")
-                    .font(.caption)
+                    .font(.appCaption)
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption2)
+                Image(systemName: "chevron.right").font(.appCaption2)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
@@ -294,9 +316,9 @@ struct CalendarView: View {
                 selected = Date()
             } label: {
                 Text("今天")
-                    .font(.system(size: 13, weight: .semibold))
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 6)
+                    .font(.appScaled(size: 13, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
                     .background(Capsule().fill(Color.accentColor.opacity(0.16)))
                     .overlay(Capsule().stroke(Color.accentColor.opacity(0.55), lineWidth: 1))
             }
@@ -308,14 +330,14 @@ struct CalendarView: View {
             // 中间：月份/年份大字标题（明显大于任意一天的数字）
             Button { step(-1) } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .font(.appScaled(size: 15, weight: .semibold))
+                    .frame(width: 26, height: 26)
                     .background(iconChip)
             }
             .buttonStyle(.plain)
 
             Text(titleString)
-                .font(.system(size: 30, weight: .heavy, design: .rounded))
+                .font(.appScaled(size: mode == .month ? 22 : 26, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(titleForeground)
                 .minimumScaleFactor(0.55)
@@ -324,8 +346,8 @@ struct CalendarView: View {
 
             Button { step(1) } label: {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .font(.appScaled(size: 15, weight: .semibold))
+                    .frame(width: 26, height: 26)
                     .background(iconChip)
             }
             .buttonStyle(.plain)
@@ -343,17 +365,17 @@ struct CalendarView: View {
 
             Button { WindowManager.shared.showSettings() } label: {
                 Label("设置", systemImage: "gearshape.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
+                    .font(.appScaled(size: 14, weight: .semibold))
+                    .padding(.horizontal, 9)
+                    .frame(height: 28)
                     .background(iconChip)
             }
             .buttonStyle(.plain)
             .help("设置（⌘,）")
             Button { toggleCalendarLock() } label: {
                 Image(systemName: config.calendarLocked ? "lock.fill" : "lock.open")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .font(.appScaled(size: 14, weight: .semibold))
+                    .frame(width: 26, height: 26)
                     .background(iconChip)
                     .foregroundStyle(config.calendarLocked ? Color.accentColor : foregroundTone)
             }
@@ -362,7 +384,7 @@ struct CalendarView: View {
         }
         .foregroundStyle(foregroundTone)
         .padding(.horizontal, 2)
-        .padding(.bottom, 8)
+        .padding(.bottom, mode == .month ? 1 : 4)
     }
 
     func toggleCalendarLock() {
@@ -390,84 +412,152 @@ struct CalendarView: View {
     }
 
     var weekdayRow: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 2) {
+            Color.clear.frame(width: 28, height: 1)
             ForEach(Array(weekdays.enumerated()), id: \.offset) { i, w in
-                Text(w)
+                Text("星期\(w)")
                     .frame(maxWidth: .infinity)
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(2)
-                    .foregroundStyle(i >= 5 ? weekendTone : foregroundTone.opacity(0.6))
+                    .font(.appScaled(size: config.calendarWeekdayFontSize, weight: .bold))
+                    .foregroundStyle(i >= 5 ? weekendTone : foregroundTone)
+                    .frame(height: max(24, config.calendarWeekdayFontSize * config.fontScale + 6))
+                    .background(Color(red: 0.06, green: 0.46, blue: 0.67).opacity(0.32))
             }
         }
-        .padding(.vertical, 5)
-        .background(alignment: .bottom) { Rectangle().fill(hairline).frame(height: 0.5) }
     }
 
     var grid: some View {
-        let cells = CalendarEngine.gridded(currentMonth)
-        let gap: CGFloat = 6   // 瓷砖缝：格子之间的留白
+        let cells = CalendarEngine.gridded(currentMonth, firstWeekday: 2)
+        let gap: CGFloat = 2
         return GeometryReader { geo in
             let rows = max(1, cells.count / 7)
             let cellH = max(0, (geo.size.height - CGFloat(rows - 1) * gap) / CGFloat(rows))
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: gap), count: 7), spacing: gap) {
-                ForEach(Array(cells.enumerated()), id: \.offset) { _, day in
-                    dayCell(day, height: cellH)
+            VStack(spacing: gap) {
+                ForEach(0..<rows, id: \.self) { row in
+                    HStack(spacing: gap) {
+                        Text("\(Calendar(identifier: .iso8601).component(.weekOfYear, from: cells[row * 7]))")
+                            .font(.appScaled(size: config.calendarWeekNumberFontSize, weight: .medium))
+                            .foregroundStyle(foregroundTone.opacity(0.8))
+                            .frame(width: 28)
+                        ForEach(0..<7, id: \.self) { col in
+                            dayCell(cells[row * 7 + col], height: cellH)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
                 }
             }
         }
     }
 
-    func dayCell(_ day: Date, height: CGFloat) -> some View {
-        let events = model.events(on: day)
-        let isToday = Calendar.current.isDate(day, inSameDayAs: calendarNow)
-        let inMonth = Calendar.current.isDate(day, equalTo: currentMonth, toGranularity: .month)
-        let isSelected = selected.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false
-        let weekend = Calendar.current.isDateInWeekend(day)
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .top, spacing: 4) {
-                Text(fmtDay(day))
-                    .font(.system(size: 22, weight: isToday || isSelected ? .bold : .regular, design: .monospaced))
-                    .monospacedDigit()
-                    .foregroundStyle(numberTextColor(isSelected: isSelected, isToday: isToday, inMonth: inMonth, weekend: weekend))
-                    .frame(width: 30, height: 30)
-                    .background {
-                        if isToday {
-                            Circle().fill(todayCircle).shadow(color: Color.orange.opacity(0.55), radius: 6)
+    var yearGrid: some View {
+        let calendar = Calendar.current
+        let start = calendar.dateInterval(of: .year, for: currentMonth)?.start ?? currentMonth
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 30) {
+                ForEach(0..<12, id: \.self) { index in
+                    if let month = calendar.date(byAdding: .month, value: index, to: start) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(index + 1)月")
+                                .font(.appScaled(size: 20, weight: .bold))
+                                .foregroundStyle(foregroundTone)
+                            weekdayRow
+                            let cells = CalendarEngine.gridded(month, firstWeekday: 2)
+                            ForEach(0..<(cells.count / 7), id: \.self) { row in
+                                HStack(spacing: 2) {
+                                    Text("\(Calendar(identifier: .iso8601).component(.weekOfYear, from: cells[row * 7]))")
+                                        .font(.appScaled(size: config.calendarWeekNumberFontSize))
+                                        .foregroundStyle(foregroundTone.opacity(0.8))
+                                        .frame(width: 28)
+                                    ForEach(0..<7, id: \.self) { col in
+                                        dayCell(cells[row * 7 + col], height: 150, displayMonth: month)
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                }
+                            }
                         }
                     }
-                if isToday {
-                    Text("今天")
-                        .font(.system(size: 10, weight: .bold))
+                }
+            }
+        }
+    }
+
+    func dayCell(_ day: Date, height: CGFloat, displayMonth: Date? = nil) -> some View {
+        let events = model.events(on: day).sorted { !$0.isDone && $1.isDone }
+        let isToday = Calendar.current.isDate(day, inSameDayAs: calendarNow)
+        let inMonth = Calendar.current.isDate(day, equalTo: displayMonth ?? currentMonth, toGranularity: .month)
+        let isSelected = selected.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false
+        let weekend = Calendar.current.isDateInWeekend(day)
+        let holiday = HolidayCalendar.info(on: day)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(fmtDay(day))
+                    .font(.appScaled(size: config.calendarDateFontSize, weight: isToday || isSelected ? .bold : .medium, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(numberTextColor(isSelected: isSelected, isToday: isToday, inMonth: inMonth, weekend: weekend))
+                Text(LunarService.text(for: day))
+                    .font(.appScaled(size: config.calendarLunarFontSize, weight: .medium))
+                    .foregroundStyle(inMonth ? foregroundTone.opacity(0.82) : foregroundTone.opacity(0.4))
+                    .lineLimit(1)
+                if let holiday {
+                    if let name = holiday.title {
+                        Text(name)
+                            .font(.appScaled(size: config.calendarHolidayFontSize, weight: .semibold))
+                            .foregroundStyle(holiday.isDayOff ? Color.yellow : Color.pink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    Text(holiday.isDayOff ? "休" : "班")
+                        .font(.appScaled(size: max(10, config.calendarHolidayFontSize - 1), weight: .bold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 3)
-                        .background(Capsule().fill(Color.orange))
+                        .frame(width: 18 * config.fontScale, height: 18 * config.fontScale)
+                        .background(Circle().fill(holiday.isDayOff ? Color.green : Color.pink))
+                        .help(holiday.isDayOff ? (holiday.title ?? "休息日") : "调休上班")
                 }
                 Spacer(minLength: 0)
-                Text(LunarService.text(for: day))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(inMonth ? Color.secondary : Color.secondary.opacity(0.45))
-                    .lineLimit(1)
             }
-            .padding(.horizontal, 7)
-            .padding(.top, 6)
-            ForEach(Array(events.prefix(3))) { e in
-                eventChip(e)
-                    .contentShape(Rectangle())
-                    .onTapGesture { selectedEventID = e.id }
+            .padding(.horizontal, 6)
+            .padding(.top, 3)
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(events) { e in
+                        HStack(alignment: .top, spacing: 2) {
+                            let category = config.categoryFor(e)
+                            Button {
+                                selected = day
+                                selectedEventID = e.id
+                                model.toggleDone(e.id)
+                            } label: {
+                                Image(systemName: e.isDone ? "checkmark.circle.fill" : "circle")
+                                    .font(.appScaled(size: config.calendarTaskFontSize, weight: .medium))
+                                    .foregroundStyle(category.color.opacity(e.isDone ? 0.5 : 1))
+                                    .frame(width: 20 * config.fontScale, height: 20 * config.fontScale)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(category.label) · \(e.isDone ? "取消完成" : "标记完成")")
+                            .accessibilityLabel("\(category.label)，\(e.isDone ? "取消完成" : "标记完成")：\(e.title)")
+                            Button {
+                                selected = day
+                                selectedEventID = e.id
+                            } label: {
+                                eventChip(e).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(category.label) · 查看事项")
+                            .accessibilityLabel("查看事项：\(e.title)")
+                        }
+                        .background(selectedEventID == e.id ? Color.yellow.opacity(0.16) : Color.clear)
+                    }
+                }
             }
-            if events.count > 3 {
-                Text("还有 \(events.count - 3) 条…")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-            }
-            Spacer(minLength: 0)
+            .scrollIndicators(.hidden)
         }
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .top)
-        .background(cellBackground(inMonth: inMonth, isSelected: isSelected, isToday: isToday))
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .simultaneousGesture(TapGesture().onEnded { selected = day })
-        .simultaneousGesture(TapGesture(count: 2).onEnded { openCompose(day) })
+        .background {
+            cellBackground(inMonth: inMonth, isSelected: isSelected, isToday: isToday)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { openCompose(day) }
+                .onTapGesture { selected = day }
+        }
         .contextMenu { dayContextMenu(day, events: events) }
     }
 
@@ -497,7 +587,7 @@ struct CalendarView: View {
     }
 
     func numberTextColor(isSelected: Bool, isToday: Bool, inMonth: Bool, weekend: Bool) -> Color {
-        if isToday { return .white }
+        if isToday { return foregroundTone }
         if !inMonth { return foregroundTone.opacity(0.35) }
         if weekend { return weekendTone }
         return foregroundTone
@@ -518,20 +608,20 @@ struct CalendarView: View {
         }
     }
 
-    /// 瓷砖质感：圆角 + 半透明材质 + 细描边 + 轻投影（立体感），缝隙由 grid spacing 提供
+    /// Square translucent day frames match the reference calendar while retaining configurable double borders.
     func cellBackground(inMonth: Bool, isSelected: Bool, isToday: Bool = false) -> some View {
-        let tile = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        return tile.strokeBorder(Color.black.opacity(inMonth ? 0.48 : 0.25), lineWidth: 1.5)
+        let tile = Rectangle()
+        return tile.fill(inMonth ? Color(red: 0.04, green: 0.40, blue: 0.62).opacity(0.20)
+                                 : Color.gray.opacity(0.25))
+            .overlay(tile.strokeBorder(Color.black.opacity(inMonth ? 0.42 : 0.23), lineWidth: 1))
             .overlay(tile.inset(by: 2).strokeBorder(
-                config.clockColor(config.calendarFrameOuterHex).opacity(inMonth ? 0.9 : 0.45), lineWidth: 1))
-            .overlay(tile.inset(by: 5).strokeBorder(
-                Color.black.opacity(inMonth ? 0.34 : 0.17), lineWidth: 1))
-            .overlay(tile.inset(by: 6.5).strokeBorder(
-                config.clockColor(config.calendarFrameInnerHex).opacity(inMonth ? 0.8 : 0.4), lineWidth: 0.75))
+                config.clockColor(config.calendarFrameOuterHex).opacity(inMonth ? 0.65 : 0.3), lineWidth: 0.8))
+            .overlay(tile.inset(by: 4).strokeBorder(
+                config.clockColor(config.calendarFrameInnerHex).opacity(inMonth ? 0.35 : 0.15), lineWidth: 0.6))
             .overlay {
                 if isToday {
-                    tile.strokeBorder(config.clockColor(config.calendarTodayFrameHex), lineWidth: 3)
-                    tile.inset(by: 5).strokeBorder(config.clockColor(config.calendarTodayFrameHex).opacity(0.8), lineWidth: 1)
+                    tile.strokeBorder(Color.yellow, lineWidth: 2.5)
+                    tile.inset(by: 4).strokeBorder(config.clockColor(config.calendarTodayFrameHex).opacity(0.9), lineWidth: 1)
                 } else if isSelected {
                     tile.strokeBorder(config.clockColor(config.calendarSelectionFrameHex).opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                 }
@@ -539,18 +629,14 @@ struct CalendarView: View {
     }
 
     func eventChip(_ e: EventItem) -> some View {
-        let c = config.categoryFor(e)
         return Text(e.title)
-            .font(.system(size: 9, weight: .medium))
-            .lineLimit(1)
+            .font(.appScaled(size: config.calendarTaskFontSize, weight: e.isDone ? .medium : .semibold))
+            .fixedSize(horizontal: false, vertical: true)
             .strikethrough(e.isDone)
-            .foregroundStyle(e.isDone ? Color.secondary : foregroundTone)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
+            .foregroundStyle(e.isDone ? foregroundTone.opacity(0.52) : foregroundTone)
+            .padding(.leading, 2)
+            .padding(.trailing, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 3).fill(c.color.opacity(e.isDone ? 0.14 : 0.4)))
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(c.color.opacity(0.55), lineWidth: 0.5))
-            .padding(.horizontal, 5)
     }
 
     var legend: some View {
@@ -564,7 +650,7 @@ struct CalendarView: View {
             Spacer()
             Button("＋ 今天记一笔") { currentMonth = Date(); openCompose(Date()) }
         }
-        .font(.caption2)
+        .font(.appCaption2)
     }
 
     func legendItem(_ c: Color, _ t: String) -> some View {
@@ -594,7 +680,8 @@ struct CalendarView: View {
     }
 
     func weekDates(_ anchor: Date) -> [Date] {
-        let cal = Calendar.current
+        var cal = Calendar.current
+        cal.firstWeekday = 2
         let start = cal.dateInterval(of: .weekOfYear, for: anchor)?.start ?? anchor
         return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
     }
@@ -673,23 +760,23 @@ struct EventDetailPanel: View {
                     HStack(spacing: 8) {
                         Circle().fill(catColor(e)).frame(width: 12, height: 12)
                         Text(e.title)
-                            .font(.system(size: 17, weight: .bold))
+                            .font(.appScaled(size: 17, weight: .bold))
                             .foregroundStyle(foregroundTone)
                             .lineLimit(2)
                     }
                     HStack(spacing: 8) {
                         Text(e.isDone ? "已完成" : "进行中")
-                            .font(.caption2.weight(.semibold))
+                            .font(.appCaption2.weight(.semibold))
                             .foregroundStyle(e.isDone ? Color.secondary : Color.cyan)
                         if e.isAllDay {
-                            Text("全天").font(.caption2).foregroundStyle(.secondary)
+                            Text("全天").font(.appCaption2).foregroundStyle(.secondary)
                         }
                     }
                 }
                 Spacer(minLength: 0)
                 Button { onClose() } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15))
+                        .font(.appScaled(size: 15))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -753,7 +840,7 @@ struct EventDetailPanel: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 12))
+        .font(.appScaled(size: 12))
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Rectangle().fill(hairline).frame(height: 0.5) }
     }
@@ -851,10 +938,10 @@ struct CalendarTimelineView: View {
     var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "calendar.badge.checkmark")
-                .font(.system(size: 36))
+                .font(.appScaled(size: 36))
                 .foregroundStyle(foregroundTone.opacity(0.4))
             Text("当天没有事项")
-                .font(.system(size: 14, weight: .medium))
+                .font(.appScaled(size: 14, weight: .medium))
                 .foregroundStyle(foregroundTone.opacity(0.55))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -877,14 +964,14 @@ struct CalendarTimelineView: View {
         return VStack(spacing: 1) {
             // 主行：ISO 日期 yyyy-MM-dd
             Text(isoDate(d))
-                .font(.system(size: 15, weight: isToday ? .bold : .semibold, design: .monospaced))
+                .font(.appScaled(size: 15, weight: isToday ? .bold : .semibold, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(isToday ? Color.white : foregroundTone)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             // 次行：星期 + 农历/节气/农历节日
             Text("周\(weekdayShort(d)) · \(lunar)")
-                .font(.system(size: 10, weight: .medium))
+                .font(.appScaled(size: 10, weight: .medium))
                 .foregroundStyle(isToday ? Color.white.opacity(0.85) : foregroundTone.opacity(0.5))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -955,7 +1042,7 @@ struct CalendarTimelineView: View {
         VStack(spacing: 0) {
             ForEach(range.start...range.end, id: \.self) { h in
                 Text(String(format: "%02d:00", h))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(.appScaled(size: 11, weight: .medium, design: .monospaced))
                     .monospacedDigit()
                     .foregroundStyle(foregroundTone.opacity(0.55))
                     .frame(height: colH, alignment: .topTrailing)
@@ -1010,7 +1097,7 @@ struct CalendarTimelineView: View {
         return HStack(spacing: 3) {
             Circle().fill(c.color).frame(width: 6, height: 6)
             Text(e.title)
-                .font(.system(size: 9, weight: .medium))
+                .font(.appScaled(size: 9, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
@@ -1145,14 +1232,14 @@ struct YearView: View {
         let rows = max(1, cells.count / 7)
         return VStack(spacing: 3) {
             Text("\(m + 1)月")
-                .font(.system(size: 13, weight: .bold))
+                .font(.appScaled(size: 13, weight: .bold))
                 .foregroundStyle(foregroundTone)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 0) {
                 ForEach(shortWeekdays, id: \.self) { w in
                     Text(w)
                         .frame(maxWidth: .infinity)
-                        .font(.system(size: 8))
+                        .font(.appScaled(size: 8))
                         .foregroundStyle(foregroundTone.opacity(0.5))
                 }
             }
@@ -1178,7 +1265,7 @@ struct YearView: View {
         let hasEvents = !model.events(on: d).isEmpty
         let dot = min(18, max(8, height - 3))
         return Text(fmtNum(d))
-            .font(.system(size: 10, weight: isToday ? .bold : .regular))
+            .font(.appScaled(size: 10, weight: isToday ? .bold : .regular))
             .foregroundStyle(inMonth
                              ? (isToday ? Color.white : foregroundTone)
                              : foregroundTone.opacity(0.35))
@@ -1274,7 +1361,7 @@ struct EventEditorView: View {
                 Circle().fill(effectiveColor).frame(width: 10, height: 10)
                 TextField(existing == nil ? "新建事项" : "事项标题", text: $title)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.appScaled(size: 15, weight: .semibold))
                     .focused($titleFocused)
             }
             .padding(.bottom, 10)
@@ -1329,7 +1416,7 @@ struct EventEditorView: View {
             row(icon: "rectangle.badge.checkmark", label: "弹窗") {
                 Toggle("", isOn: $popup).toggleStyle(.checkbox).labelsHidden()
                 Text(popup ? "到点弹窗提醒" : "不弹窗（仅语音/通知）")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(.appScaled(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }
             Divider()
@@ -1350,11 +1437,11 @@ struct EventEditorView: View {
             // 备注
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $note)
-                    .font(.system(size: 12))
+                    .font(.appScaled(size: 12))
                     .frame(height: 56)
                     .scrollContentBackground(.hidden)
                 if note.isEmpty {
-                    Text("添加备注…").font(.system(size: 12))
+                    Text("添加备注…").font(.appScaled(size: 12))
                         .foregroundStyle(.tertiary)
                         .padding(.top, 8).padding(.leading, 5)
                         .allowsHitTesting(false)
@@ -1389,7 +1476,7 @@ struct EventEditorView: View {
                 .frame(width: 34, alignment: .leading)
             content()
         }
-        .font(.system(size: 12))
+        .font(.appScaled(size: 12))
         .padding(.vertical, 7)
     }
 
@@ -1490,44 +1577,12 @@ struct PetView: View {
     var standaloneVideo: some View {
         PetVideoView(urls: PetMedia.videoURLs())
             .frame(width:wm.petWindowSize.width,height:wm.petWindowSize.height)
-            .contentShape(Rectangle())
-
-            .contextMenu {
-
-                Button(config.petLocked ? "解锁拖动" : "锁定位置") { togglePetLock() }
-                Button("宠物设置…") { wm.showSettings(tab:3) }
-                Button("隐藏视频") { wm.togglePet() }
-            }
     }
 
     /// The desktop rig shows only the cat. Controls remain available on right-click.
     var standaloneCat: some View {
         PetRigView(compact: !wm.petExpanded)
             .frame(width: wm.petWindowSize.width, height: wm.petWindowSize.height)
-            .contentShape(Rectangle())
-
-            .onTapGesture { pet() }
-            .contextMenu {
-                ForEach(PetActivity.allCases) { activity in
-                    Button {
-                        config.petActivity = activity
-                        if activity == .follow { config.petTrackingEnabled = true }
-                        config.save()
-                    } label: {
-                        Label(activity.title, systemImage: config.petActivity == activity ? "checkmark.circle.fill" : activity.symbol)
-                    }
-                }
-                Divider()
-                Button("摸摸头") { pet() }
-                Button("试提醒") { remind() }
-                Divider()
-
-                Button(config.petLocked ? "解锁拖动" : "锁定位置") { togglePetLock() }
-                Button("宠物设置…") { wm.showSettings(tab: 3) }
-                Divider()
-                Button("隐藏猫咪") { wm.togglePet() }
-            }
-            .help("拖动猫咪移动位置；拖拽边缘调整大小；右键打开操作菜单")
     }
 
     /// 悬浮球：小型圆球默认收起，悬浮屏幕边缘，点击展开为完整卡片
@@ -1547,7 +1602,7 @@ struct PetView: View {
             if mood != .idle {
                 Circle().fill(cardGradient)
                     .frame(width: 22, height: 22)
-                    .overlay(Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(.white))
+                    .overlay(Image(systemName: "sparkles").font(.appScaled(size: 11)).foregroundStyle(.white))
                     .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
                     .offset(x: WindowManager.petBallSize.width * 0.30, y: WindowManager.petBallSize.height * 0.30)
             }
@@ -1567,7 +1622,7 @@ struct PetView: View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 10) {
                 Text(config.petName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.appScaled(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
@@ -1601,7 +1656,7 @@ struct PetView: View {
                 .overlay(alignment: .bottom) {
                     if let r = reaction {
                         Text(r)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.appScaled(size: 12, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(3)
                             .multilineTextAlignment(.center)
@@ -1619,7 +1674,7 @@ struct PetView: View {
                             Image(systemName: dp.source == .ai ? "sparkles" : "person.fill")
                             Text(dp.source == .ai ? "AI·\(dp.kind.label)" : "用户·\(dp.kind.label)")
                         }
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.appScaled(size: 10, weight: .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
@@ -1638,7 +1693,7 @@ struct PetView: View {
 
             Button { wm.setPetExpanded(false) } label: {
                 Image(systemName: "chevron.down.circle.fill")
-                    .font(.system(size: 15))
+                    .font(.appScaled(size: 15))
                     .foregroundStyle(.white.opacity(0.9))
                     .background(Circle().fill(.black.opacity(0.32)).frame(width: 24, height: 24))
             }
@@ -1649,7 +1704,7 @@ struct PetView: View {
         .overlay(alignment: .topLeading) {
             Button { togglePetLock() } label: {
                 Image(systemName: config.petLocked ? "lock.fill" : "lock.open")
-                    .font(.system(size: 13))
+                    .font(.appScaled(size: 13))
                     .foregroundStyle(config.petLocked ? Color.accentColor : .primary)
                     .frame(width: 26, height: 26)
                     .background(Circle().fill(.ultraThinMaterial))
@@ -1689,7 +1744,7 @@ struct PetView: View {
     func actionChip(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
-                .font(.system(size: 12, weight: .medium))
+                .font(.appScaled(size: 12, weight: .medium))
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 10)
@@ -1879,7 +1934,7 @@ struct PetFallbackPhotoView: View {
                     .id(pose.name)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
-                Text("🐱").font(.system(size: 80))
+                Text("🐱").font(.appScaled(size: 80))
             }
         }
         .animation(.easeInOut(duration: 0.3), value: mood)
@@ -2034,7 +2089,7 @@ struct ReminderPopupView: View {
         VStack(spacing: 10) {
             HStack {
                 Image(systemName: "bell.badge.fill").foregroundStyle(.orange)
-                Text("事项提醒").font(.headline)
+                Text("事项提醒").font(.appHeadline)
                 Spacer()
                 Button { onDismiss() } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -2043,10 +2098,10 @@ struct ReminderPopupView: View {
                 .help("关闭")
             }
             Text(title)
-                .font(.system(size: 16, weight: .bold))
+                .font(.appScaled(size: 16, weight: .bold))
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
-            Text(detail).font(.callout).foregroundStyle(.secondary)
+            Text(detail).font(.appCallout).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Button("知道了") { onDismiss() }.buttonStyle(.bordered)
                 Button("标记完成") { onDone() }.buttonStyle(.borderedProminent)
@@ -2075,6 +2130,7 @@ struct AppKitTextField: NSViewRepresentable {
         f.delegate = context.coordinator
         f.bezelStyle = .roundedBezel
         f.focusRingType = .none
+        f.font = NSFont.systemFont(ofSize: 13 * ConfigStore.shared.fontScale)
         // 横向低拥抱优先级，让它在 HStack/表单里可被拉宽，观感接近 .roundedBorder
         f.setContentHuggingPriority(.defaultLow, for: .horizontal)
         f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -2085,6 +2141,7 @@ struct AppKitTextField: NSViewRepresentable {
         context.coordinator.parent = self
         if nsView.stringValue != text { nsView.stringValue = text }
         nsView.placeholderString = placeholder
+        nsView.font = NSFont.systemFont(ofSize: 13 * ConfigStore.shared.fontScale)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -2195,7 +2252,7 @@ struct ClockWidgetView: View {
             VStack(spacing: 6) {
                 timeRow
                 Text(dateString)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.appScaled(size: 9, weight: .medium))
                     .foregroundColor(digitsColor.opacity(0.7))
             }
         }
@@ -2252,8 +2309,8 @@ struct ClockWidgetView: View {
     }
 
     var timeRow: some View {
-        let f = Font.system(size: 23, weight: .medium, design: .monospaced)
-        let cf = Font.system(size: 16, weight: .medium, design: .monospaced)
+        let f = Font.appScaled(size: 23, weight: .medium, design: .monospaced)
+        let cf = Font.appScaled(size: 16, weight: .medium, design: .monospaced)
         return HStack(spacing: 2) {
             Text(pad(hour)).font(f)
             Text(":").font(cf).opacity(colonOpacity)
@@ -2280,7 +2337,7 @@ struct ClockWidgetView: View {
         Group {
             Button { wm.toggleClockPanel() } label: {
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.appScaled(size: 11, weight: .bold))
                         .foregroundColor(.white)
                         .frame(minWidth: 18, minHeight: 18)
                         .padding(.horizontal, 5)
@@ -2304,7 +2361,7 @@ struct ClockWidgetView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 9, weight: .bold))
+                .font(.appScaled(size: 9, weight: .bold))
                 .foregroundColor(.white.opacity(0.6))
                 .frame(width: 16, height: 16)
                 .background(Circle().fill(Color.white.opacity(0.08)))
@@ -2342,18 +2399,18 @@ struct TodayPanelView: View {
         let tasks = model.todayTasks(limit: 5, now: now)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("今日待办").font(.system(size: 12, weight: .semibold))
+                Text("今日待办").font(.appScaled(size: 12, weight: .semibold))
                     .tracking(2)
                     .foregroundColor(Color(red: 0.9, green: 0.956, blue: 1).opacity(0.85))
                 if !tasks.isEmpty {
-                    Text("\(tasks.count)").font(.system(size: 10))
+                    Text("\(tasks.count)").font(.appScaled(size: 10))
                         .foregroundColor(Color(red: 0.75, green: 0.91, blue: 1))
                         .frame(minWidth: 16, minHeight: 16).padding(.horizontal, 4)
                         .background(Capsule().fill(Color.white.opacity(0.12)))
                 }
                 Spacer()
                 Button { AppModel.shared.load(); now = Date() } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 12))
+                    Image(systemName: "arrow.clockwise").font(.appScaled(size: 12))
                         .foregroundColor(Color.white.opacity(0.6))
                 }.buttonStyle(.plain).help("刷新")
             }
@@ -2362,7 +2419,7 @@ struct TodayPanelView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 if tasks.isEmpty {
-                    Text("今天没有待办事项").font(.system(size: 12))
+                    Text("今天没有待办事项").font(.appScaled(size: 12))
                         .foregroundColor(Color.white.opacity(0.5))
                         .frame(maxWidth: .infinity).padding(.vertical, 14)
                 } else {
@@ -2388,12 +2445,12 @@ struct TodayPanelView: View {
         return HStack(spacing: 8) {
             Circle().fill(cat.color).frame(width: 6, height: 6)
                 .shadow(color: cat.color.opacity(0.8), radius: 3)
-            Text(e.title).font(.system(size: 12))
+            Text(e.title).font(.appScaled(size: 12))
                 .foregroundColor(urgent ? Color(red: 1, green: 0.56, blue: 0.65) : Color(red: 0.91, green: 0.96, blue: 1))
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 4)
             Text(taskTimeLabel(e, d, now: now))
-                .font(.system(size: 11, weight: urgent ? .bold : .regular))
+                .font(.appScaled(size: 11, weight: urgent ? .bold : .regular))
                 .foregroundColor(urgent ? Color(red: 1, green: 0.36, blue: 0.47) : Color.white.opacity(0.55))
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
@@ -2454,7 +2511,7 @@ struct WorkloadChartView: View {
             HStack(alignment: .top, spacing: 4) {
                 // 纵轴刻度（最大值）
                 Text(WorkloadEngine.fmt(maxV))
-                    .font(.system(size: 8)).foregroundStyle(.secondary)
+                    .font(.appScaled(size: 8)).foregroundStyle(.secondary)
                 GeometryReader { geo in
                     let w = geo.size.width
                     let h = geo.size.height
@@ -2490,7 +2547,7 @@ struct WorkloadChartView: View {
             HStack(spacing: 0) {
                 ForEach(Array(points.enumerated()), id: \.offset) { i, p in
                     Text(i % step == 0 || i == n - 1 ? p.label : "")
-                        .font(.system(size: 8))
+                        .font(.appScaled(size: 8))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
@@ -2502,11 +2559,19 @@ struct WorkloadChartView: View {
 
 struct SettingsView: View {
     @ObservedObject var config = ConfigStore.shared
+    @ObservedObject var holidays = HolidayCalendar.shared
     @ObservedObject var router = SettingsRouter.shared
     @ObservedObject var voice = VoiceService.shared
     @State private var apiKeyText: String = ""
     @State private var testResult: String = ""
     @State private var importMessage: String = ""
+    @State private var historyImportMessage: String = ""
+    @State private var exportPeriod: EventExportPeriod = .month
+    @State private var exportAnchorDate = Date()
+    @State private var exportKind: ExportKind = .csv
+    @State private var exportAnalysis = ""
+    @State private var exportAnalyzing = false
+    @State private var exportError: String?
     @State private var manualKind: Personality.Kind = .energetic    // 当日手动性格暂存
     @State private var aiEvaluating = false
     @State private var aiError: String?
@@ -2522,10 +2587,11 @@ struct SettingsView: View {
     @State private var draftColor: Color = .blue
 
     enum AppearanceSection: String, CaseIterable, Identifiable {
-        case theme, wallpaper, frames, clock, window
+        case typography, theme, wallpaper, frames, clock, window
         var id: String { rawValue }
         var title: String {
             switch self {
+            case .typography: return "字体大小"
             case .theme: return "主题与配色"
             case .wallpaper: return "壁纸"
             case .frames: return "日期格边框"
@@ -2535,6 +2601,7 @@ struct SettingsView: View {
         }
         var icon: String {
             switch self {
+            case .typography: return "textformat.size"
             case .theme: return "paintpalette"
             case .wallpaper: return "photo"
             case .frames: return "square.on.square"
@@ -2543,7 +2610,7 @@ struct SettingsView: View {
             }
         }
     }
-    @State private var appearanceSection: AppearanceSection = .theme
+    @State private var appearanceSection: AppearanceSection = .typography
     @State private var appearanceExpanded = true
 
     /// 设置分类（左侧栏条目）
@@ -2558,6 +2625,7 @@ struct SettingsView: View {
         .init(id: 4, title: "AI 助理", icon: "sparkles"),
         .init(id: 5, title: "数据", icon: "square.and.arrow.up"),
         .init(id: 6, title: "工作量", icon: "chart.bar.xaxis"),
+        .init(id: 7, title: "导出", icon: "doc.badge.arrow.up"),
     ]
 
     // 仿 macOS 系统设置：左侧栏选分类，右侧显示对应细节
@@ -2582,7 +2650,7 @@ struct SettingsView: View {
                                     appearanceExpanded.toggle()
                                 } label: {
                                     Image(systemName: appearanceExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.caption).frame(width:24,height:30)
+                                        .font(.appCaption).frame(width:24,height:30)
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel(appearanceExpanded ? "收起外观子目录" : "展开外观子目录")
@@ -2597,7 +2665,7 @@ struct SettingsView: View {
                                     router.tab = 1
                                 } label: {
                                     Label(section.title, systemImage: section.icon)
-                                        .font(.callout)
+                                        .font(.appCallout)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.leading, 28).padding(.trailing, 8).padding(.vertical, 8)
                                         .contentShape(Rectangle())
@@ -2621,6 +2689,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity)
+        .font(.appBody)
         .accentColor(config.customAccent())
         .onAppear {
             apiKeyText = ConfigStore.shared.apiKey
@@ -2635,8 +2704,10 @@ struct SettingsView: View {
         case 2: reminderTab
         case 3: ScrollView { petTab }
         case 4: aiTab
+        case 5: ScrollView { dataTab }
         case 6: ScrollView { workloadTab }
-        default: dataTab
+        case 7: ScrollView { exportTab }
+        default: generalTab
         }
     }
 
@@ -2731,7 +2802,7 @@ struct SettingsView: View {
             }
             if config.visibleBuiltIn.count < EventItem.CategoryColor.allCases.count {
                 HStack {
-                    Text("存在已隐藏的内置分类。").font(.caption).foregroundStyle(.secondary)
+                    Text("存在已隐藏的内置分类。").font(.appCaption).foregroundStyle(.secondary)
                     Button("恢复全部内置分类") {
                         var cfg = ConfigStore.shared
                         cfg.hiddenCategories = [:]
@@ -2741,7 +2812,7 @@ struct SettingsView: View {
                 }
             }
             Text("左下角图例会按这里配置的颜色分类与色值显示；隐藏的内置分类不再出现在图例与事项颜色选择中。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
 
             HStack {
                 if !showingDraft {
@@ -2776,7 +2847,7 @@ struct SettingsView: View {
             Divider()
             Text("运行日志").bold()
             Text("日志每天一个文件，保存在：\(LogStore.shared.directory.path)")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
                 .textSelection(.enabled)
             HStack {
                 Button("打开日志目录") { LogStore.shared.openInFinder() }
@@ -2784,7 +2855,7 @@ struct SettingsView: View {
                 Button("查看 AI 日志") { AILogStore.shared.openTodayLog() }
             }
             Text("若日历窗口卡死/点不动，重启 app 后从「查看今天日志」可读取卡死前最后记录（约 8 秒无响应会记预警）。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
 
             Spacer()
         }
@@ -2808,7 +2879,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("外观").foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.appCaption).foregroundStyle(.tertiary)
                 Text(appearanceSection.title).fontWeight(.semibold)
                 Spacer()
             }
@@ -2817,6 +2888,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     switch appearanceSection {
+                    case .typography: appearanceTypography
                     case .theme: appearanceTheme
                     case .wallpaper: appearanceWallpaper
                     case .frames: appearanceFrames
@@ -2832,9 +2904,62 @@ struct SettingsView: View {
         }
     }
 
+    var appearanceTypography: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("字体大小").font(.appTitle2.bold())
+            Text("整体比例会调整日历、设置、事项详情、宠物控件和时钟文字；下方可分别微调日历格中的各类文字。调整时立即预览，松开滑块后保存。")
+                .font(.appCaption).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Text("整体字体比例").frame(width: 110, alignment: .leading)
+                Slider(value: $config.fontScale, in: 0.8...1.6, step: 0.05) { editing in
+                    if !editing { config.save() }
+                }
+                Text("\(Int((config.fontScale * 100).rounded()))%")
+                    .monospacedDigit().frame(width: 48, alignment: .trailing)
+            }
+            Divider()
+            fontSizeRow("日期数字", value: $config.calendarDateFontSize, range: 10...30)
+            fontSizeRow("农历", value: $config.calendarLunarFontSize, range: 10...26)
+            fontSizeRow("事项", value: $config.calendarTaskFontSize, range: 12...36)
+            fontSizeRow("节假日", value: $config.calendarHolidayFontSize, range: 9...24)
+            fontSizeRow("星期标题", value: $config.calendarWeekdayFontSize, range: 10...28)
+            fontSizeRow("周次", value: $config.calendarWeekNumberFontSize, range: 9...24)
+            HStack(spacing: 12) {
+                Text("28").font(.appScaled(size: config.calendarDateFontSize))
+                Text("八月十八").font(.appScaled(size: config.calendarLunarFontSize))
+                Text("休").font(.appScaled(size: config.calendarHolidayFontSize))
+                Text("提交报告").font(.appScaled(size: config.calendarTaskFontSize, weight: .semibold))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.12)))
+            Button("恢复默认字体大小") {
+                config.fontScale = 1
+                config.calendarDateFontSize = 14
+                config.calendarLunarFontSize = 13
+                config.calendarTaskFontSize = 16
+                config.calendarHolidayFontSize = 12
+                config.calendarWeekdayFontSize = 15
+                config.calendarWeekNumberFontSize = 12
+                config.save()
+            }
+        }
+    }
+
+    func fontSizeRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 12) {
+            Text(title).frame(width: 110, alignment: .leading)
+            Slider(value: value, in: range, step: 1) { editing in
+                if !editing { config.save() }
+            }
+            Text("\(Int(value.wrappedValue)) pt")
+                .monospacedDigit().frame(width: 48, alignment: .trailing)
+        }
+    }
+
     var appearanceTheme: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("主题").font(.title2.bold())
+            Text("主题").font(.appTitle2.bold())
 if !config.usesWallpaperBackground {
                 Picker("主题", selection: $config.theme) {
                     ForEach(Theme.allCases, id: \.self) { t in
@@ -2851,14 +2976,14 @@ if !config.usesWallpaperBackground {
                 paletteRow("文本色", keyPath: \.customFgHex)
                 paletteRow("强调色", keyPath: \.customAccentHex)
                 Text(config.usesWallpaperBackground ? "正在使用背景墙，背景色由壁纸决定；仍可调整文本色和强调色。" : "用圆盘可调整颜色；点「清除」回落到主题默认。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.appCaption).foregroundStyle(.secondary)
                 Button("恢复默认外观") { config.resetAppearance() }
         }
     }
 
     var appearanceWallpaper: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("背景墙").font(.title2.bold())
+            Text("背景墙").font(.appTitle2.bold())
 if config.wallpaperPath.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(Self.wallpaperPresets) { p in
@@ -2879,22 +3004,22 @@ if config.wallpaperPath.isEmpty {
                     Button(config.wallpaperPath.isEmpty ? "选择背景图片…" : "更换背景图片…") { chooseWallpaper() }
                     if !config.wallpaperPath.isEmpty {
                         Button("移除图片") { config.wallpaperPath = ""; config.save() }
-                            .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption)
+                            .buttonStyle(.plain).foregroundStyle(.secondary).font(.appCaption)
                     }
                 }
                 Text("背景透明度控制图片、预设颜色或主题的显示强度，可在「外观 → 窗口与透明度」中调节。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.appCaption).foregroundStyle(.secondary)
         }
     }
 
     var appearanceFrames: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("日期格双层边框").font(.title2.bold())
+            Text("日期格双层边框").font(.appTitle2.bold())
 ColorPicker("外层边框", selection: colorBinding(\.calendarFrameOuterHex), supportsOpacity: false)
                 ColorPicker("内层边框", selection: colorBinding(\.calendarFrameInnerHex), supportsOpacity: false)
                 ColorPicker("今天边框", selection: colorBinding(\.calendarTodayFrameHex), supportsOpacity: false)
                 ColorPicker("选中日期边框", selection: colorBinding(\.calendarSelectionFrameHex), supportsOpacity: false)
-                Text("仅调整相框边线颜色，中心仍然镂空。").font(.caption).foregroundStyle(.secondary)
+                Text("仅调整相框边线颜色，中心仍然镂空。").font(.appCaption).foregroundStyle(.secondary)
                 Button("恢复边框默认颜色") {
                     config.calendarFrameOuterHex = "#FFFFFF"
                     config.calendarFrameInnerHex = "#FFFFFF"
@@ -2907,7 +3032,7 @@ ColorPicker("外层边框", selection: colorBinding(\.calendarFrameOuterHex), su
 
     var appearanceClock: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("悬浮时钟外观").font(.title2.bold())
+            Text("悬浮时钟外观").font(.appTitle2.bold())
 ColorPicker("背景盘颜色", selection: colorBinding(\.clockPlateHex), supportsOpacity: false)
                 HStack {
                     Text("背景盘透明度")
@@ -2926,7 +3051,7 @@ ColorPicker("背景盘颜色", selection: colorBinding(\.clockPlateHex), support
                     Text("\(Int(config.clockScale*100))%").monospacedDigit().frame(width:44)
                 }
                 Text("也可拖拽时钟左下角调整大小。点击红色圆点展开或收起事项；悬停不会展开。透明度只影响背景盘。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.appCaption).foregroundStyle(.secondary)
                 ColorPicker("外环", selection: colorBinding(\.clockOuterHex), supportsOpacity: false)
                 ColorPicker("内环与刻度", selection: colorBinding(\.clockInnerHex), supportsOpacity: false)
                 ColorPicker("时间与日期数字", selection: colorBinding(\.clockDigitsHex), supportsOpacity: false)
@@ -2942,7 +3067,7 @@ ColorPicker("背景盘颜色", selection: colorBinding(\.clockPlateHex), support
 
     var appearanceWindow: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("窗口").font(.title2.bold())
+            Text("窗口").font(.appTitle2.bold())
 Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktopPin).onChange(of: config.desktopPin) { _ in config.save() }
                 HStack {
                     Text("背景透明度")
@@ -2959,8 +3084,8 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         .monospacedDigit().frame(width:46,alignment:.trailing)
                 }
                 Text("100% 完全透明，可直接看到桌面墙纸；0% 显示完整背景。只调整背景，文字和事项保持清晰。")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("桌面层使用未公开窗口层级，若在你的系统上被遮挡/异常，可关闭「贴到桌面层」改为悬浮窗口。").font(.caption)
+                    .font(.appCaption).foregroundStyle(.secondary)
+                Text("桌面层使用未公开窗口层级，若在你的系统上被遮挡/异常，可关闭「贴到桌面层」改为悬浮窗口。").font(.appCaption)
         }
     }
 
@@ -2975,7 +3100,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                     cfg[keyPath: keyPath] = ""
                     cfg.save()
                 }
-                .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption)
+                .buttonStyle(.plain).foregroundStyle(.secondary).font(.appCaption)
             }
             Spacer()
         }
@@ -3027,7 +3152,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
         VStack(alignment: .leading, spacing: 18) {
             Text("分类权重").bold()
             Text("每个事项按其分类的权重计入当日工作量；权重越高代表越重要/越耗时。默认 1.0。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
             ForEach(config.visibleBuiltIn, id: \.self) { c in
                 weightRow(key: c.rawValue,
                           label: config.categoryLabels[c.rawValue] ?? c.defaultLabel,
@@ -3061,7 +3186,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                       systemImage: "circle.dashed")
                     .foregroundStyle(.orange)
             }
-            .font(.callout)
+            .font(.appCallout)
 
             let bd = WorkloadEngine.breakdown(workloadRange)
             if !bd.isEmpty {
@@ -3072,7 +3197,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         Spacer()
                         Text(WorkloadEngine.fmt(item.value)).monospacedDigit().foregroundStyle(.secondary)
                     }
-                    .font(.callout)
+                    .font(.appCallout)
                 }
             }
 
@@ -3114,18 +3239,18 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                 Spacer()
             }
             if let e = analysisError {
-                Text(e).font(.caption).foregroundStyle(.red)
+                Text(e).font(.appCaption).foregroundStyle(.red)
             }
             if !analysisText.isEmpty {
                 Text(analysisText)
-                    .font(.callout)
+                    .font(.appCallout)
                     .textSelection(.enabled)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12)))
             }
             Text("AI 会读取所选区间的加权工作量与分类占比，给出【总结】与【建议】；未启用 AI 时会提示先去「AI 助理」配置。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
 
             Spacer()
         }
@@ -3158,27 +3283,211 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
 
     var dataTab: some View {
         Form {
-            Text("导出事项").bold()
+            Text("中国大陆节假日").bold()
+            Text("日历内置 2025、2026 年官方放假调休安排，并在启动和查看新年份时自动联网检查。已公布的年度数据会保存在本机；未公布的年份不推算。绿色“休”为休息日，粉色“班”为调休上班日。")
+                .font(.appCaption).foregroundStyle(.secondary)
             HStack {
-                Button("导出 ICS") { export(.ics) }
-                Button("导出 CSV") { export(.csv) }
+                Button("立即检查更新") {
+                    holidays.checkForUpdates(around: Calendar.current.component(.year, from: Date()), force: true)
+                }
+                Text(holidays.updateStatus).font(.appCaption).foregroundStyle(.secondary)
             }
-            Text("ICS 可导入系统日历 / Google / Outlook；CSV 适合表格软件。").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Link("2025 年官方通知", destination: URL(string: "https://www.gov.cn/zhengce/zhengceku/202411/content_6986383.htm")!)
+                Link("2026 年官方通知", destination: URL(string: "https://www.beijing.gov.cn/zhengce/zhengcefagui/202511/t20251104_4258873.html")!)
+                Link("自动更新数据源", destination: URL(string: "https://github.com/NateScarlet/holiday-cn")!)
+            }
+            Divider()
+            Text("导出已移至左侧「导出」设置框，可按天、周、月、年筛选，并生成 AI 复盘报告。")
+                .font(.appCallout).foregroundStyle(.secondary)
+            Button("打开导出设置") { router.tab = 7 }
+            Divider()
+            Text("历史数据导入").bold()
+            Text("支持“日期”“任务”两列的 .xlsx 文件；同一单元格里的任务按换行拆分，结尾“（已完成）”会导入为已完成事项。重复导入会自动跳过已有记录。")
+                .font(.appCaption).foregroundStyle(.secondary)
+            HStack {
+                Button("导入内置历史数据") {
+                    if let url = HistoryWorkbookImporter.bundledURL { importHistory(from: url) }
+                }
+                .disabled(HistoryWorkbookImporter.bundledURL == nil)
+                Button("选择 Excel 文件…") { chooseHistoryWorkbook() }
+            }
+            if !historyImportMessage.isEmpty {
+                Text(historyImportMessage).font(.appCallout).textSelection(.enabled)
+            }
             Divider()
             Text("导入").bold()
             HStack {
                 Button("导入 ICS…") { importICS() }
                 if !importMessage.isEmpty {
-                    Text(importMessage).font(.caption).foregroundStyle(.secondary)
+                    Text(importMessage).font(.appCaption).foregroundStyle(.secondary)
                 }
             }
-            Text("导入系统日历 / Google / Outlook 导出的 .ics 文件。").font(.caption).foregroundStyle(.secondary)
+            Text("导入系统日历 / Google / Outlook 导出的 .ics 文件。").font(.appCaption).foregroundStyle(.secondary)
             Divider()
             Text("云同步").bold()
             Text("已移除 CloudKit 云同步（需开发者签名）。数据仅保存在本机，可用于导出/导入备份。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
         }
         .padding()
+    }
+
+    func chooseHistoryWorkbook() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "xlsx") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.message = "选择包含“日期”“任务”两列的历史数据 Excel 文件"
+        if panel.runModal() == .OK, let url = panel.url { importHistory(from: url) }
+    }
+
+    func importHistory(from url: URL) {
+        do {
+            let items = try HistoryWorkbookImporter.parse(url)
+            let result = AppModel.shared.importHistory(items)
+            historyImportMessage = "读取 \(items.count) 条事项，新增 \(result.added) 条，跳过重复 \(result.skipped) 条；其中 \(items.filter(\.isDone).count) 条标记为已完成。"
+        } catch {
+            historyImportMessage = "导入失败：\(error.localizedDescription)"
+        }
+    }
+
+    var exportTab: some View {
+        let interval = exportPeriod.interval(containing: exportAnchorDate)
+        let events = exportEvents
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("导出日历与 AI 复盘").font(.appTitle2.bold())
+            Text("选择一个基准日期，导出对应的自然日、自然周、自然月或自然年。")
+                .font(.appCallout).foregroundStyle(.secondary)
+            Picker("时间范围", selection: $exportPeriod) {
+                ForEach(EventExportPeriod.allCases) { period in Text(period.title).tag(period) }
+            }
+            .pickerStyle(.segmented)
+            DatePicker("基准日期", selection: $exportAnchorDate, displayedComponents: .date)
+            if let interval {
+                Text("区间：\(formatExportDate(interval.start)) — \(formatExportDate(interval.end.addingTimeInterval(-1)))")
+                    .font(.appCaption).foregroundStyle(.secondary)
+            }
+            Label("此区间包含 \(events.count) 条事项", systemImage: "calendar")
+                .font(.appCallout)
+
+            Divider()
+            Text("导出文件").font(.appHeadline)
+            Picker("格式", selection: $exportKind) {
+                ForEach(ExportKind.allCases) { kind in Text(kind.title).tag(kind) }
+            }
+            .frame(maxWidth: 340)
+            HStack {
+                Button("导出所选区间…") { exportSelectedPeriod() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(exportKind == .report && exportAnalysis.isEmpty)
+                if exportKind == .report && exportAnalysis.isEmpty {
+                    Text("先完成 AI 分析，才能导出复盘报告。")
+                        .font(.appCaption).foregroundStyle(.secondary)
+                }
+            }
+            Text("CSV 适合表格软件；ICS 可导入系统日历、Google 日历和 Outlook；AI 复盘报告包含分析与事项明细。")
+                .font(.appCaption).foregroundStyle(.secondary)
+
+            Divider()
+            HStack {
+                Text("AI 分析").font(.appHeadline)
+                Spacer()
+                Button(exportAnalyzing ? "分析中…" : "分析所选区间") { analyzeExportPeriod() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(exportAnalyzing || events.isEmpty)
+            }
+            Text("分析会使用 AI 助理中配置的模型。事项标题和时间仅在 AI 助理设置中已启用，并确认允许发送日历信息时提交。")
+                .font(.appCaption).foregroundStyle(.secondary)
+            if let exportError {
+                Text(exportError).font(.appCaption).foregroundStyle(.red)
+            }
+            if !exportAnalysis.isEmpty {
+                Text(exportAnalysis)
+                    .font(.appCallout).textSelection(.enabled)
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12)))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(22)
+        .onChange(of: exportPeriod) { _ in
+            exportAnalysis = ""
+            exportError = nil
+        }
+        .onChange(of: exportAnchorDate) { _ in
+            exportAnalysis = ""
+            exportError = nil
+        }
+    }
+
+    var exportEvents: [EventItem] {
+        guard let interval = exportPeriod.interval(containing: exportAnchorDate) else { return [] }
+        return AppModel.shared.events.filter { !$0.isDeleted }.flatMap { event in
+            event.occurrences(in: interval).map { occurrence in
+                var item = event
+                if event.repeatRule != .none {
+                    let duration = event.endDate.map { $0.timeIntervalSince(event.startDate) }
+                    item.id = UUID()
+                    item.startDate = occurrence
+                    item.endDate = duration.map { occurrence.addingTimeInterval($0) }
+                    item.repeatRule = .none
+                }
+                return item
+            }
+        }.sorted { $0.startDate < $1.startDate }
+    }
+
+    func formatExportDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年M月d日"
+        return formatter.string(from: date)
+    }
+
+    var exportPeriodLabel: String {
+        guard let interval = exportPeriod.interval(containing: exportAnchorDate) else { return "所选区间" }
+        return "\(formatExportDate(interval.start))至\(formatExportDate(interval.end.addingTimeInterval(-1)))"
+    }
+
+    func analyzeExportPeriod() {
+        exportAnalyzing = true
+        exportError = nil
+        exportAnalysis = ""
+        let events = exportEvents
+        let periodLabel = exportPeriodLabel
+        Task { @MainActor in
+            defer { exportAnalyzing = false }
+            do {
+                exportAnalysis = try await ConfigStore.shared.analyzeEventsForExport(events, periodLabel: periodLabel)
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    func exportSelectedPeriod() {
+        let events = exportEvents
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "宠物日历-\(exportPeriodLabel).\(exportKind == .ics ? "ics" : exportKind == .report ? "md" : "csv")"
+        let content: String
+        switch exportKind {
+        case .ics:
+            panel.allowedContentTypes = [.text]
+            content = EventExporter.ics(events)
+        case .csv:
+            panel.allowedContentTypes = [.commaSeparatedText]
+            content = "\u{FEFF}" + EventExporter.csv(events)
+        case .report:
+            panel.allowedContentTypes = [.plainText]
+            content = EventExporter.markdownReport(events: events, period: exportPeriodLabel, analysis: exportAnalysis)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            exportError = nil
+        } catch {
+            exportError = "保存失败：\(error.localizedDescription)"
+        }
     }
 
     func importICS() {
@@ -3195,31 +3504,45 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
         }
     }
 
-    func export(_ kind: ExportKind) {
-        let panel = NSSavePanel()
-        let content: String
-        switch kind {
-        case .ics:
-            panel.nameFieldStringValue = "宠物日历.ics"
-            panel.allowedContentTypes = [.text]
-            content = EventExporter.ics(AppModel.shared.events)
-        case .csv:
-            panel.nameFieldStringValue = "宠物日历.csv"
-            panel.allowedContentTypes = [.commaSeparatedText]
-            content = EventExporter.csv(AppModel.shared.events)
-        }
-        if panel.runModal() == .OK, let url = panel.url {
-            try? content.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-
     var reminderTab: some View {
         Form {
+            Section("每天统一提醒") {
+                Toggle("提醒尚未完成的事项", isOn: $config.dailySummaryEnabled)
+                    .onChange(of: config.dailySummaryEnabled) { _ in
+                        config.save()
+                        ReminderScheduler.shared.sync()
+                    }
+                HStack {
+                    Picker("时间", selection: $config.dailySummaryHour) {
+                        ForEach(0..<24, id: \.self) { hour in
+                            Text(String(format: "%02d 时", hour)).tag(hour)
+                        }
+                    }
+                    .frame(width: 125)
+                    Picker("", selection: $config.dailySummaryMinute) {
+                        ForEach(0..<60, id: \.self) { minute in
+                            Text(String(format: "%02d 分", minute)).tag(minute)
+                        }
+                    }
+                    .frame(width: 90)
+                }
+                .disabled(!config.dailySummaryEnabled)
+                .onChange(of: config.dailySummaryHour) { _ in
+                    config.save()
+                    ReminderScheduler.shared.sync()
+                }
+                .onChange(of: config.dailySummaryMinute) { _ in
+                    config.save()
+                    ReminderScheduler.shared.sync()
+                }
+                Text("默认每天 15:00 汇总当天及之前尚未完成的事项；完成任务后会自动更新待通知内容。")
+                    .font(.appCaption).foregroundStyle(.secondary)
+            }
             Toggle("开启语音播报", isOn: $config.voiceEnabled).onChange(of: config.voiceEnabled) { _ in config.save() }
             Toggle("在线声线（Edge TTS，每个性格一条真声线，需联网）", isOn: $config.onlineTTS)
                 .onChange(of: config.onlineTTS) { _ in config.save() }
             Text("在线声线（全女声）：元气=晓晓 / 慵懒=晓妮（软糯慢调）/ 傲娇=晓伊（清亮）/ 高冷=小北（低稳）；断网或失败自动回退本地语音。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
             HStack {
                 Text("播报语速")
                 Slider(value: $config.voiceRate, in: 0.3...0.7).frame(width: 200)
@@ -3259,13 +3582,13 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                 }
                 .frame(width: 100, height: 90)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(config.petName.isEmpty ? "咪咪" : config.petName).font(.headline)
+                    Text(config.petName.isEmpty ? "咪咪" : config.petName).font(.appHeadline)
                     AppKitTextField(text: $config.petName, placeholder: "猫咪名字")
                         .frame(maxWidth: 180)
                         .frame(height: 22)
                         .onChange(of: config.petName) { _ in config.save() }
                     Text("3D 跟随猫自然转头注视鼠标；视频模式循环播放内置的 video 目录视频。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.appCaption).foregroundStyle(.secondary)
                 }
             }
             GroupBox("桌面显示") {
@@ -3279,7 +3602,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         WindowManager.shared.setClockVisible(config.countdownEnabled)
                     }
                 Text("关闭日历窗口会同时隐藏宠物和时钟；点击 Dock 图标可恢复已启用的窗口。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.appCaption).foregroundStyle(.secondary)
                 }
             }
             Text("性格（决定语音语速与提醒文案）")
@@ -3289,15 +3612,15 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
             .pickerStyle(.segmented)
             .onChange(of: config.personalityKind) { _ in config.save() }
             Text("性格影响语音和提醒文案；视频保持原始画面，不叠加配饰。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
             Divider()
             dayPersonalitySection
             Divider()
             Text("宠物视频")
             VStack(alignment: .leading, spacing: 8) {
-                Text("视频播放文件夹").font(.headline)
+                Text("视频播放文件夹").font(.appHeadline)
                 Text(config.petVideoFolder.isEmpty ? "内置视频" : config.petVideoFolder)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.appCaption).foregroundStyle(.secondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Button("选择文件夹…") { pickVideoFolder() }
@@ -3311,20 +3634,20 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                 Text(count > 0
                     ? "共 \(count) 段视频，按文件名顺序静音循环播放。支持 MP4、MOV、M4V，仅播放文件夹内的文件，不含子文件夹。"
                     : "文件夹无法访问或没有可播放的视频，请重新选择文件夹或恢复内置视频。")
-                    .font(.caption).foregroundStyle(count > 0 ? Color.secondary : Color.orange)
+                    .font(.appCaption).foregroundStyle(count > 0 ? Color.secondary : Color.orange)
             }
             Divider()
             Toggle("锁定宠物窗口（禁止拖拽；与日历独立）", isOn: Binding(
                 get: { config.petLocked },
                 set: { v in config.petLocked = v; config.save(); WindowManager.shared.applyPetLock() }))
-            Text("锁定后仍可点击互动。3D 猫咪右键可锁定或隐藏，拖拽边缘调整大小；菜单栏可重新显示。拖动后位置会自动记忆。")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("锁定后猫咪仍会显示，但不能拖动或缩放。菜单栏可重新显示已隐藏的猫咪。")
+                .font(.appCaption).foregroundStyle(.secondary)
             Divider()
             Text("鼠标跟随")
             Text("3D 猫咪通过连续颈部变形自然转头，持续注视鼠标；停住鼠标仍保持视线。关闭跟随后可以打盹。")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("拖拽宠物展示区域的边缘或四角可调整大小，尺寸会自动保存；按住猫咪主体可拖动位置。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.appCaption).foregroundStyle(.secondary)
+            Text("点击猫咪展示框内任意位置打开操作菜单；按住猫咪主体拖动可移动位置，按住展示框边缘拖动可调整大小。移动中的猫咪也可以直接点击。")
+                .font(.appCaption).foregroundStyle(.secondary)
             Picker("形象渲染", selection: $config.petRenderMode) {
                 Text("3D 跟随猫").tag("rig")
                 Text("视频轮播").tag("video")
@@ -3338,34 +3661,34 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                 if config.petActivity == .follow { config.petTrackingEnabled = true }
                 config.save()
             }
-            Text("右键猫咪也可切换活动；锁定位置会暂停漫步；切换其他软件不会打断猫咪活动。")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("点击猫咪可切换活动；锁定位置会暂停漫步；切换其他软件不会打断猫咪活动。")
+                .font(.appCaption).foregroundStyle(.secondary)
             Toggle("启用鼠标跟随", isOn: $config.petTrackingEnabled)
                 .onChange(of: config.petTrackingEnabled) { _ in config.save() }
             HStack {
-                Text("反应速度").font(.caption).frame(width: 92, alignment: .leading)
+                Text("反应速度").font(.appCaption).frame(width: 92, alignment: .leading)
                 Slider(value: $config.petFollowStiffness, in: 2...12) { editing in
                     if !editing { config.save() }
                 }
                 Text(String(format: "%.0f", config.petFollowStiffness))
-                    .font(.caption2).foregroundStyle(.secondary).frame(width: 24)
+                    .font(.appCaption2).foregroundStyle(.secondary).frame(width: 24)
             }
             HStack {
-                Text("视线范围(pt)").font(.caption).frame(width: 92, alignment: .leading)
+                Text("视线范围(pt)").font(.appCaption).frame(width: 92, alignment: .leading)
                 Slider(value: $config.petGazeRadius, in: 100...1200, step: 50) { editing in
                     if !editing { config.save() }
                 }
                 Text(String(format: "%.0f", config.petGazeRadius))
-                    .font(.caption2).foregroundStyle(.secondary).frame(width: 32)
+                    .font(.appCaption2).foregroundStyle(.secondary).frame(width: 32)
             }
             HStack {
-                Text("打盹等待(分)").font(.caption).frame(width: 92, alignment: .leading)
+                Text("打盹等待(分)").font(.appCaption).frame(width: 92, alignment: .leading)
                 Slider(value: Binding(
                     get: { config.petIdleToDoze / 60 },
                     set: { v in config.petIdleToDoze = v * 60; config.save() }),
                        in: 2...30, step: 1)
                 Text(String(format: "%.0f", config.petIdleToDoze / 60))
-                    .font(.caption2).foregroundStyle(.secondary).frame(width: 24)
+                    .font(.appCaption2).foregroundStyle(.secondary).frame(width: 24)
             }
             Spacer()
         }
@@ -3382,7 +3705,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                 Spacer()
                 if config.effectiveDayPersonality != nil {
                     Button("取消今日设置") { config.clearDayPersonality() }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption)
+                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.appCaption)
                 }
             }
             if let dp = config.effectiveDayPersonality {
@@ -3391,23 +3714,23 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         Image(systemName: dp.source == .ai ? "sparkles" : "person.fill")
                             .foregroundStyle(Color.accentColor)
                         Text("\(dp.source.label)：今日【\(dp.kind.label)】")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.appSubheadline.weight(.semibold))
                     }
                     if dp.source == .ai {
                         if let s = dp.summary, !s.isEmpty {
-                            Text("按今日工作量：\(s)").font(.caption).foregroundStyle(.secondary)
+                            Text("按今日工作量：\(s)").font(.appCaption).foregroundStyle(.secondary)
                         }
                         Button("查看理由") { showReason.toggle() }
-                            .buttonStyle(.link).font(.caption)
+                            .buttonStyle(.link).font(.appCaption)
                         if showReason {
                             Text(dp.reason ?? "（AI 未给出理由）")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.appCaption).foregroundStyle(.secondary)
                                 .padding(6)
                                 .background(Color.white.opacity(0.05))
                                 .cornerRadius(6)
                         }
                     } else {
-                        Text("已手动指定今日性格。").font(.caption).foregroundStyle(.secondary)
+                        Text("已手动指定今日性格。").font(.appCaption).foregroundStyle(.secondary)
                     }
                 }
                 .padding(10)
@@ -3416,7 +3739,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor.opacity(0.5), lineWidth: 0.8))
             } else {
                 Text("未单独设置今日性格，沿用上方全局性格：\(config.personalityKind.label)。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.appCaption).foregroundStyle(.secondary)
             }
 
             Picker("方式", selection: dayModeBinding) {
@@ -3437,10 +3760,10 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                     let w = config.todayWorkload()
                     Text("今日工作量：\(w.total) 个事项（定时 \(w.timed) / 全天 \(w.allDay)）" +
                          (w.nextMinutes.map { "；最近定时还剩约 \($0) 分钟" } ?? ""))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.appCaption).foregroundStyle(.secondary)
                     if aiEvaluating {
                         ProgressView().controlSize(.small)
-                        Text("正在评估…").font(.caption).foregroundStyle(.secondary)
+                        Text("正在评估…").font(.appCaption).foregroundStyle(.secondary)
                     } else {
                         Button(config.effectiveDayPersonality?.source == .ai ? "重新评估" : "AI 评估今日性格") {
                             Task { await runAI() }
@@ -3448,7 +3771,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         .buttonStyle(.bordered)
                     }
                     if let err = aiError {
-                        Text(err).font(.caption).foregroundStyle(.red)
+                        Text(err).font(.appCaption).foregroundStyle(.red)
                     }
                 }
             default:
@@ -3538,7 +3861,7 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                     aiField(icon: "cube", placeholder: "模型名称（如 deepseek-chat）", text: $config.llm.modelName)
                     // API Key 用普通 TextField（支持 ⌘A/⌘C/⌘X/⌘V），可点眼睛临时隐藏
                     HStack(spacing: 8) {
-                        Image(systemName: "key").font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+                        Image(systemName: "key").font(.appScaled(size: 12)).foregroundStyle(.secondary).frame(width: 16)
                         // 显/隐必须用两个不同视图分支，NSSecureTextField 与 NSTextField 类不同、无法原地切换
                         if keyRevealed {
                             AppKitTextField(text: $apiKeyText, placeholder: "API Key（sk-…）", secure: false)
@@ -3554,23 +3877,23 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         .help(keyRevealed ? "隐藏（隐藏后不可复制）" : "显示明文")
                     }
                     Text("支持 Command+A 全选、Command+C/V 复制粘贴、Command+X 剪切；API Key 存本机偏好文件，不再弹钥匙串鉴权。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.appCaption).foregroundStyle(.secondary)
                 }
                 aiCard {
                     aiLabel("生成参数", icon: "slider.horizontal.3")
                     HStack {
-                        Text("温度").font(.system(size: 12))
+                        Text("温度").font(.appScaled(size: 12))
                         Slider(value: $config.llm.temperature, in: 0.0...1.0)
-                        Text(String(format: "%.1f", config.llm.temperature)).font(.system(size: 12)).monospacedDigit()
+                        Text(String(format: "%.1f", config.llm.temperature)).font(.appScaled(size: 12)).monospacedDigit()
                     }
                     Toggle("确认：把事件标题/剩余时间发送给所配模型", isOn: $config.llm.privacyOK)
-                        .font(.system(size: 12))
+                        .font(.appScaled(size: 12))
                 }
                 HStack(spacing: 10) {
                     Button("保存配置") { saveAI() }.buttonStyle(.borderedProminent)
                     Button("测试连接") { testAI() }.buttonStyle(.bordered)
                     if !testResult.isEmpty {
-                        Text(testResult).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(testResult).font(.appCaption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
             }
@@ -3588,13 +3911,13 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
 
     func aiLabel(_ s: String, icon: String) -> some View {
         Label(s, systemImage: icon)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.appScaled(size: 12, weight: .semibold))
             .foregroundStyle(.secondary)
     }
 
     func aiField(icon: String, placeholder: String, text: Binding<String>, secure: Bool = false) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+            Image(systemName: icon).font(.appScaled(size: 12)).foregroundStyle(.secondary).frame(width: 16)
             AppKitTextField(text: text, placeholder: placeholder, secure: secure)
                 .frame(height: 22)
         }

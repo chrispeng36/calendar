@@ -16,7 +16,8 @@ let package = Package(
                 .copy("../../Resources/pet-base.png"),
                 .copy("../../Resources/pet-head.png"),
                 .copy("../../Resources/pet-body.png"),
-                .copy("../../Resources/pet-eyes.png")
+                .copy("../../Resources/pet-eyes.png"),
+                .copy("../../Resources/历史数据.xlsx")
             ]
         )
     ]

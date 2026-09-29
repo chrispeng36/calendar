@@ -205,6 +205,27 @@ protocol LLMClient {
     func complete(system: String, user: String, config: LLMConfig) async throws -> String
 }
 
+enum AIResponseCleaner {
+    /// Keep internal reasoning and echoed request messages out of user-visible text.
+    static func visibleText(_ raw: String, system: String, user: String) -> String {
+        var text = raw
+        if let regex = try? NSRegularExpression(pattern: "(?is)<think(?:ing)?>.*?(?:</think(?:ing)?>|$)") {
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            text = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        }
+        for prompt in [system, user] where !prompt.isEmpty {
+            text = text.replacingOccurrences(of: prompt, with: "")
+        }
+        let roleLabels = ["system:", "system prompt:", "user:", "user prompt:", "prompt:",
+                          "assistant:", "assistant response:", "系统提示：", "用户提示：", "提示词：", "回答："]
+        text = text.components(separatedBy: .newlines).filter { line in
+            let normalized = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return !roleLabels.contains(normalized)
+        }.joined(separator: "\n")
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 struct OpenAICompatClient: LLMClient {
     func complete(system: String, user: String, config: LLMConfig) async throws -> String {
         // baseURL 已带 /v1 则直接拼，否则补 /v1（原写法两个分支相同，漏 /v1 会 404）
@@ -241,13 +262,10 @@ struct OpenAICompatClient: LLMClient {
             throw NSError(domain: "LLM", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "响应格式异常"])
         }
-        // 推理类模型（如 deepseek-reasoner）正文在 reasoning_content、content 可能为空 → 回退读取
-        var content = msg["content"] as? String ?? ""
-        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let rc = msg["reasoning_content"] as? String {
-            content = rc
-        }
-        return content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // reasoning_content is deliberately never shown: it can contain the complete prompt
+        // and internal chain-of-thought. Only the model's final content is user-visible.
+        let content = msg["content"] as? String ?? ""
+        return AIResponseCleaner.visibleText(content, system: system, user: user)
     }
 }
 
@@ -284,7 +302,7 @@ struct AnthropicClient: LLMClient {
             throw NSError(domain: "LLM", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "响应格式异常"])
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return AIResponseCleaner.visibleText(text, system: system, user: user)
     }
 }
 
@@ -334,18 +352,32 @@ final class CopyGenerator {
 
 // MARK: - 提醒调度（本地通知 + 语音）
 
+private final class ReminderNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = ReminderNotificationDelegate()
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+}
+
 final class ReminderScheduler {
     static let shared = ReminderScheduler()
     private var timer: Timer?
     private var scheduled: [String] = []
+    private var lastSummarySyncDay: Date?
 
     func start() {
         LogStore.shared.log("[提醒] 提醒调度器启动（每 15s 轮询）")
+        UNUserNotificationCenter.current().delegate = ReminderNotificationDelegate.shared
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         sync()
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+        let ticker = Timer(timeInterval: 15, repeats: true) { _ in
             Task { @MainActor in self.checkDue() }
         }
+        RunLoop.main.add(ticker, forMode: .common)
+        timer = ticker
     }
 
     func sync() {
@@ -353,20 +385,52 @@ final class ReminderScheduler {
         center.removeAllPendingNotificationRequests()
         let config = ConfigStore.shared
         let enabled = config.reminderDefaults
+        let now = Date()
+        lastSummarySyncDay = Calendar.current.startOfDay(for: now)
         for e in AppModel.shared.events where !e.isDeleted && !e.isDone {
             let offsets = e.reminders.isEmpty ? enabled : e.reminders.map { $0.offsetMinutes }
             for off in offsets {
                 guard let fireDate = Calendar.current.date(byAdding: .minute, value: off, to: e.startDate),
-                      fireDate > Date() else { continue }
+                      fireDate > now else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = e.title
                 content.body = "还有 \(abs(off)) 分钟" + (off < 0 ? "开始/截止" : "")
                 content.sound = .default
                 let comp = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
                 let trigger = UNCalendarNotificationTrigger(dateMatching: comp, repeats: false)
-                let req = UNNotificationRequest(identifier: e.id.uuidString, content: content, trigger: trigger)
+                let req = UNNotificationRequest(identifier: "\(e.id.uuidString)-\(off)", content: content, trigger: trigger)
                 center.add(req)
             }
+        }
+        scheduleDailySummaries(center: center, config: config, now: now)
+    }
+
+    private func scheduleDailySummaries(center: UNUserNotificationCenter, config: ConfigStore, now: Date) {
+        guard config.dailySummaryEnabled else { return }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        for offset in 0..<30 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: today),
+                  let nextDay = calendar.date(byAdding: .day, value: 1, to: day),
+                  let fireDate = calendar.date(bySettingHour: config.dailySummaryHour,
+                                               minute: config.dailySummaryMinute, second: 0, of: day),
+                  fireDate > now else { continue }
+            let pending = AppModel.shared.events.filter { event in
+                guard !event.isDeleted && !event.isDone else { return false }
+                if event.repeatRule == .none { return event.startDate < nextDay }
+                return event.occurrence(on: day) != nil
+            }
+            guard !pending.isEmpty else { continue }
+            let content = UNMutableNotificationContent()
+            content.title = "还有 \(pending.count) 项任务未完成"
+            let titles = pending.prefix(4).map(\.title).joined(separator: "、")
+            content.body = titles + (pending.count > 4 ? " 等 \(pending.count) 项" : "")
+            content.sound = .default
+            let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+            let key = calendar.dateComponents([.year, .month, .day], from: day)
+            let identifier = "daily-summary-\(key.year ?? 0)-\(key.month ?? 0)-\(key.day ?? 0)"
+            center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
         }
     }
 
@@ -374,6 +438,7 @@ final class ReminderScheduler {
     @MainActor func checkDue() {
         let config = ConfigStore.shared
         let now = Date()
+        if lastSummarySyncDay != Calendar.current.startOfDay(for: now) { sync() }
         for e in AppModel.shared.events where !e.isDeleted && !e.isDone {
             let offsets = e.reminders.isEmpty ? config.reminderDefaults : e.reminders.map { $0.offsetMinutes }
             for off in offsets {
@@ -381,7 +446,7 @@ final class ReminderScheduler {
                 let gap = now.timeIntervalSince(fireDate)
                 if gap >= 0 && gap < 15 {
                     let remaining = abs(off)
-                    let token = "\(e.id.uuidString)-\(off)"
+                    let token = "\(e.id.uuidString)-\(off)-\(Int(fireDate.timeIntervalSince1970))"
                     guard !scheduled.contains(token) else { continue }
                     scheduled.append(token)
                     // 弹窗提醒（用户在事项里配置是否弹窗，nil/true=弹）

@@ -241,10 +241,11 @@ final class WindowManager: ObservableObject {
         }
         LogStore.shared.log("[窗口] 创建宠物悬浮球…")
         let root = PetView().accentColor(ConfigStore.shared.customAccent()).environmentObject(AppModel.shared)
+            .font(.appBody)
         let host = NSHostingController(rootView: root)
         host.sizingOptions = []
         let size = petWindowSize
-        // NSPanel + nonactivatingPanel：不抢焦点但可点可拖（NSWindow 用该 mask 会拖拽异常）
+        // The whole pet frame accepts clicks, so it remains easy to grab while walking.
         let win = PetInteractionPanel(contentRect: NSRect(origin: .zero, size: size),
                                styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: false)
@@ -255,8 +256,8 @@ final class WindowManager: ObservableObject {
         win.isOpaque = false
         win.backgroundColor = .clear
         win.hasShadow = false
-        win.isMovableByWindowBackground = true
-        // 浮动在最上层，可点击、可拖动（不再是贴桌面层，否则会被所有窗口盖住）
+        win.isMovableByWindowBackground = false
+        win.ignoresMouseEvents = false
         win.level = .floating
         win.hidesOnDeactivate = false
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -312,6 +313,7 @@ final class WindowManager: ObservableObject {
             cfg.petPosX = win.frame.midX
             cfg.petPosY = win.frame.midY
             cfg.save()
+            NotificationCenter.default.post(name: .petManualMoveFinished, object: nil)
         }
     }
 
@@ -324,14 +326,16 @@ final class WindowManager: ObservableObject {
 
     func resizePet(to frame: NSRect, finished: Bool = false) {
         customPetSize = frame.size
-        petWindow?.setFrame(frame, display: true)
+        petWindow?.setFrame(visiblePetFrame(frame), display: true)
         if finished {
             let cfg = ConfigStore.shared
-            cfg.petWidth = frame.width
-            cfg.petHeight = frame.height
-            cfg.petPosX = frame.midX
-            cfg.petPosY = frame.midY
+            let actual = petWindow?.frame ?? frame
+            cfg.petWidth = actual.width
+            cfg.petHeight = actual.height
+            cfg.petPosX = actual.midX
+            cfg.petPosY = actual.midY
             cfg.save()
+            NotificationCenter.default.post(name: .petManualMoveFinished, object: nil)
         }
     }
 
@@ -460,8 +464,10 @@ final class WindowManager: ObservableObject {
             detail: detail,
             onDismiss: { self.hideReminderPopup() },
             onDone: { AppModel.shared.toggleDone(event.id); self.hideReminderPopup() })
+            .font(.appBody)
         let host = NSHostingController(rootView: root)
-        let size = CGSize(width: 320, height: 200)
+        let popupScale = max(1, ConfigStore.shared.fontScale)
+        let size = CGSize(width: 320 * popupScale, height: 200 * popupScale)
         let win = DesktopPanel(contentRect: NSRect(origin: .zero, size: size),
                                styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: false)
@@ -528,6 +534,7 @@ final class WindowManager: ObservableObject {
         let root = ClockWidgetView()
             .environmentObject(AppModel.shared)
             .environmentObject(ConfigStore.shared)
+            .font(.appBody)
         let host = NSHostingController(rootView: root)
         host.sizingOptions = []
         let size = clockWindowSize
@@ -607,8 +614,9 @@ final class WindowManager: ObservableObject {
         guard let win = petWindow else { return }
         let locked = ConfigStore.shared.petLocked
         win.isMovable = !locked
-        // Pointer movement is handled by PetInteractionPanel, not SwiftUI's background.
+        // Manual dragging is handled in PetInteractionPanel; locking disables it.
         win.isMovableByWindowBackground = false
+        win.ignoresMouseEvents = false
     }
 }
 
@@ -654,6 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMainMenu()
         setupStatusItem()
+        HolidayCalendar.shared.startAutomaticUpdates()
         ReminderScheduler.shared.start()
         WindowManager.shared.makeDesktopWindow()
         if ConfigStore.shared.petShown { WindowManager.shared.makePetWindow() }
