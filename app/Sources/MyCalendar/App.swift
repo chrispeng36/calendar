@@ -168,6 +168,17 @@ final class WindowManager: ObservableObject {
     var petWindowSize: CGSize {
         if let customPetSize { return customPetSize }
         if ConfigStore.shared.petRenderMode == "rig" {
+            if ConfigStore.shared.petSkin == "fenda" {
+                if ConfigStore.shared.petActivity == .wander {
+                    // A square transparent canvas contains the complete cat
+                    // on vertical edges and throughout corner rotations.
+                    return petExpanded ? CGSize(width: 500, height: 500) : CGSize(width: 420, height: 420)
+                }
+                if ConfigStore.shared.petActivity == .toy {
+                    return petExpanded ? CGSize(width: 455, height: 300) : CGSize(width: 375, height: 245)
+                }
+                return petExpanded ? CGSize(width: 325, height: 355) : CGSize(width: 245, height: 270)
+            }
             if ConfigStore.shared.petActivity == .toy {
                 return petExpanded ? CGSize(width:520,height:410) : CGSize(width:420,height:330)
             }
@@ -319,9 +330,31 @@ final class WindowManager: ObservableObject {
 
     func refreshPetSize() {
         guard let win = petWindow else { return }
-        var frame = win.frame
-        frame.size = petWindowSize
+        let size = petWindowSize
+        let frame = NSRect(x: win.frame.midX - size.width / 2,
+                           y: win.frame.midY - size.height / 2,
+                           width: size.width, height: size.height)
         win.setFrame(visiblePetFrame(frame), display: true)
+    }
+
+    func selectPetSkin(_ skin: String) {
+        let config = ConfigStore.shared
+        let selected = skin == "fenda" ? "fenda" : "default"
+        guard config.petSkin != selected else { return }
+        if selected == "fenda" {
+            if config.petName == "咪咪" { config.petName = "芬达" }
+            config.petActivity = .follow
+            config.petRenderMode = "rig"
+            config.petTrackingEnabled = true
+        } else if config.petName == "芬达" {
+            config.petName = "咪咪"
+        }
+        config.petSkin = selected
+        customPetSize = nil
+        config.petWidth = 0
+        config.petHeight = 0
+        config.save()
+        refreshPetSize()
     }
 
     func resizePet(to frame: NSRect, finished: Bool = false) {

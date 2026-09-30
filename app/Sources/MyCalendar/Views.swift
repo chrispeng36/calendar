@@ -3577,7 +3577,14 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 ZStack {
-                    Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                    let front = Bundle.main.resourceURL?.appendingPathComponent("fenda/front.png")
+                    let workspaceFront = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                        .appendingPathComponent("app/Resources/fenda/front.png")
+                    let preview = config.petSkin == "fenda"
+                        ? ((front.flatMap { NSImage(contentsOf: $0) })
+                            ?? NSImage(contentsOf: workspaceFront) ?? NSImage())
+                        : (NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                    Image(nsImage: preview)
                         .resizable().scaledToFit().padding(8)
                 }
                 .frame(width: 100, height: 90)
@@ -3591,6 +3598,13 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
                         .font(.appCaption).foregroundStyle(.secondary)
                 }
             }
+            Picker("宠物形象", selection: Binding(
+                get: { config.petSkin == "fenda" ? "fenda" : "default" },
+                set: { WindowManager.shared.selectPetSkin($0) })) {
+                Text("咪咪").tag("default")
+                Text("芬达").tag("fenda")
+            }
+            .pickerStyle(.segmented)
             GroupBox("桌面显示") {
                 VStack(alignment: .leading, spacing: 8) {
                 Toggle("显示桌面宠物", isOn: Binding(
@@ -3646,7 +3660,9 @@ Toggle("贴到桌面层（壁纸之上、图标之下）", isOn: $config.desktop
             Text("鼠标跟随")
             Text("3D 猫咪通过连续颈部变形自然转头，持续注视鼠标；停住鼠标仍保持视线。关闭跟随后可以打盹。")
                 .font(.appCaption).foregroundStyle(.secondary)
-            Text("点击猫咪展示框内任意位置打开操作菜单；按住猫咪主体拖动可移动位置，按住展示框边缘拖动可调整大小。移动中的猫咪也可以直接点击。")
+            Text(config.petSkin == "fenda"
+                ? "鼠标移到芬达附近时会暂停溜达；点击打开操作菜单，拖动猫咪移动位置，拖动贴近猫咪的边框调整大小。边框外的透明空白可直接操作其他应用。"
+                : "点击猫咪展示框内任意位置打开操作菜单；按住猫咪主体拖动可移动位置，按住展示框边缘拖动可调整大小。移动中的猫咪也可以直接点击。")
                 .font(.appCaption).foregroundStyle(.secondary)
             Picker("形象渲染", selection: $config.petRenderMode) {
                 Text("3D 跟随猫").tag("rig")

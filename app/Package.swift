@@ -13,6 +13,7 @@ let package = Package(
                 .copy("../../Resources/pet9"),
                 .copy("../../Resources/pet-videos"),
                 .copy("../../Resources/pet-views"),
+                .copy("../../Resources/fenda"),
                 .copy("../../Resources/pet-base.png"),
                 .copy("../../Resources/pet-head.png"),
                 .copy("../../Resources/pet-body.png"),

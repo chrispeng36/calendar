@@ -453,7 +453,7 @@ final class ConfigStore: ObservableObject {
     @Published var petGazeRadius: Double = 400        // 视线范围（pt，超出不再牵引视线）
     @Published var petIdleToDoze: Double = 300        // 打盹等待（秒）
     @Published var petRenderMode: String = "rig"      // 形象渲染源：rig(跟随猫)/video(视频轮播)/photo(照片)
-    @Published var petSkin: String = "default"        // 分层素材皮肤目录（pics/pet/<skin>/，P3 换装）
+    @Published var petSkin: String = "default"        // default=咪咪；fenda=芬达专用 3D 形象
     @Published var petPosX: Double = -1_000_000       // 宠物窗中心位置记忆（哨兵值=未记录，避免 NaN 入 plist）
     @Published var petWidth: Double = 0
     @Published var petHeight: Double = 0
@@ -602,7 +602,7 @@ final class ConfigStore: ObservableObject {
         if let v = dict["petGazeRadius"] as? Double { petGazeRadius = v }
         if let v = dict["petIdleToDoze"] as? Double { petIdleToDoze = v }
         if let v = dict["petRenderMode"] as? String { petRenderMode = v == "video" ? "video" : "rig" }
-        if let v = dict["petSkin"] as? String { petSkin = v }
+        if let v = dict["petSkin"] as? String { petSkin = v == "fenda" ? "fenda" : "default" }
         if let v = dict["petWidth"] as? Double, v.isFinite { petWidth = min(1200, max(0, v)) }
         if let v = dict["petHeight"] as? Double, v.isFinite { petHeight = min(1000, max(0, v)) }
         if let v = dict["petPosX"] as? Double { petPosX = v }
